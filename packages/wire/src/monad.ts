@@ -57,3 +57,35 @@ export const MonadBlockHeightStreamRpc = Rpc.make("monad.blockHeightStream", {
   success: BlockHeight,
   stream: true,
 });
+
+// ===== Phase 2: Wallet =====
+export class WalletMetadata extends Schema.Class<WalletMetadata>("WalletMetadata")({
+  id: Schema.String,
+  address: Schema.String,
+  label: Schema.NullOr(Schema.String),
+  source: Schema.Literal("burner", "walletconnect"),
+  createdAt: Schema.String,
+}) {}
+
+export const WalletCreateBurnerRpc = Rpc.make("monad.wallet.createBurner", {
+  payload: Schema.Struct({ label: Schema.optional(Schema.String) }),
+  success: WalletMetadata,
+});
+
+export const WalletListRpc = Rpc.make("monad.wallet.list", {
+  payload: Schema.Struct({}),
+  success: Schema.Array(WalletMetadata),
+});
+
+export const WalletGetBalanceRpc = Rpc.make("monad.wallet.getBalance", {
+  payload: Schema.Struct({ address: Schema.String }),
+  success: Schema.BigIntFromSelf,
+});
+
+export const WalletSignMessageRpc = Rpc.make("monad.wallet.signMessage", {
+  payload: Schema.Struct({
+    address: Schema.String,
+    message: Schema.String,
+  }),
+  success: Schema.String, // signature
+});
