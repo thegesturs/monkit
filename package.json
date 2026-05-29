@@ -44,14 +44,16 @@
       "react": "^19.2.0",
       "react-dom": "^19.2.0",
       "turbo": "^2.9.7",
-      "typescript": "5.9.2"
+      "typescript": "5.9.2",
+      "viem": "^2.30.0"
     }
   },
   "overrides": {
     "@effect/platform": "^0.96.0",
     "@effect/platform-node": "^0.106.0",
     "@effect/rpc": "^0.75.0",
-    "effect": "^3.21.0"
+    "effect": "^3.21.0",
+    "viem": "^2.30.0"
   },
   "dependencies": {
     "electron": "^42.1.0"

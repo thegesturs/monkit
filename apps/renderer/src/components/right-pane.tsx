@@ -1,10 +1,12 @@
 import { FolderClosed, GitBranch } from "lucide-react";
+import { useEffect } from "react";
 
 import { formatShortcut } from "../lib/shortcuts.ts";
 import { useActiveContext } from "../store/active-workspace.ts";
 import { gitStatusKey, useGitStatusStore } from "../store/git-status.ts";
 import { prDetailsKey, usePrDetailsStore } from "../store/pr-details.ts";
 import { prStateKey, usePrStateStore } from "../store/pr-state.ts";
+import { useMonadStore } from "../store/monad.ts";
 import { useUiStore } from "../store/ui.ts";
 import { useWorkspaceStore } from "../store/workspace.ts";
 import { EMPTY_WORKTREES, useWorktreesStore } from "../store/worktrees.ts";
@@ -48,6 +50,21 @@ export function RightPane() {
   const tab = useUiStore((s) => s.activeRightTab);
   const setTab = useUiStore((s) => s.setActiveRightTab);
 
+  const monadStatus = useMonadStore((s) => s.statusText());
+  const startMonadStream = useMonadStore((s) => s.startBlockStream);
+  const stopMonadStream = useMonadStore((s) => s.stopBlockStream);
+
+  // Start the live Monad block height stream as soon as any project is open.
+  // (monkit is Monad-only; the stream is cheap and always relevant.)
+  useEffect(() => {
+    if (selectedFolderId) {
+      startMonadStream();
+    }
+    return () => {
+      stopMonadStream();
+    };
+  }, [selectedFolderId, startMonadStream, stopMonadStream]);
+
   return (
     <aside className="flex h-full min-h-0 w-full flex-col">
       {selected ? <RightPaneHeader projectName={selected.name} /> : null}
@@ -85,6 +102,35 @@ export function RightPane() {
           label="Browser"
           tooltip="In-app browser for dev servers and references"
         />
+
+        {/* Monad tab group — permanent in monkit (Monad-specialized fork) */}
+        <div className="ml-1 flex items-center gap-0.5 pl-1 text-[10px] font-medium text-muted-foreground">
+          MONAD
+        </div>
+        <TabButton
+          active={tab === "monad-wallet"}
+          onClick={() => setTab("monad-wallet")}
+          label="Wallet"
+          tooltip="Burner wallet, balance, faucet, sign"
+        />
+        <TabButton
+          active={tab === "monad-contracts"}
+          onClick={() => setTab("monad-contracts")}
+          label="Contracts"
+          tooltip="ABI-driven read / write"
+        />
+        <TabButton
+          active={tab === "monad-deploy"}
+          onClick={() => setTab("monad-deploy")}
+          label="Deploy"
+          tooltip="Compile + deploy to local / testnet / mainnet"
+        />
+        <TabButton
+          active={tab === "monad-explorer"}
+          onClick={() => setTab("monad-explorer")}
+          label="Explorer"
+          tooltip="Tx history + log decoder"
+        />
       </div>
       <div className="flex min-h-0 flex-1 flex-col">
         {selected === null ? (
@@ -113,6 +159,32 @@ export function RightPane() {
             </div>
             <div hidden={tab !== "browser"} className="min-h-0 flex-1">
               <BrowserPane />
+            </div>
+
+            {/* Monad Phase 1 placeholder panes — live block height is the only real thing */}
+            <div hidden={tab !== "monad-wallet"} className="flex min-h-0 flex-1 flex-col p-3 text-xs text-muted-foreground">
+              <div className="mb-2 rounded border border-border bg-muted/30 px-2 py-1 font-mono text-[11px] text-foreground">
+                {monadStatus}
+              </div>
+              Wallet (Phase 2) — burner, balance, sign, faucet
+            </div>
+            <div hidden={tab !== "monad-contracts"} className="flex min-h-0 flex-1 flex-col p-3 text-xs text-muted-foreground">
+              <div className="mb-2 rounded border border-border bg-muted/30 px-2 py-1 font-mono text-[11px] text-foreground">
+                {monadStatus}
+              </div>
+              Contracts (Phase 4) — ABI-driven call / send UI
+            </div>
+            <div hidden={tab !== "monad-deploy"} className="flex min-h-0 flex-1 flex-col p-3 text-xs text-muted-foreground">
+              <div className="mb-2 rounded border border-border bg-muted/30 px-2 py-1 font-mono text-[11px] text-foreground">
+                {monadStatus}
+              </div>
+              Deploy (Phase 3) — forge build + deploy to any network
+            </div>
+            <div hidden={tab !== "monad-explorer"} className="flex min-h-0 flex-1 flex-col p-3 text-xs text-muted-foreground">
+              <div className="mb-2 rounded border border-border bg-muted/30 px-2 py-1 font-mono text-[11px] text-foreground">
+                {monadStatus}
+              </div>
+              Explorer (Phase 6) — decoded tx / event history
             </div>
           </>
         )}

@@ -112,6 +112,13 @@ import {
   WorktreeListRpc,
   WorktreeRemoveRpc,
 } from "./worktree.ts";
+import {
+  MonadBlockHeightStreamRpc,
+  MonadGetActiveNetworkRpc,
+  MonadGetBlockNumberRpc,
+  MonadListNetworksRpc,
+  MonadSetActiveNetworkRpc,
+} from "./monad.ts";
 
 /**
  * The single source of truth for every RPC method exposed by the main process.
@@ -215,6 +222,11 @@ export const MemoizeRpcs = RpcGroup.make(
   IndexFindReferencesRpc,
   IndexReadChunkRpc,
   IndexListModuleRpc,
+  MonadGetBlockNumberRpc,
+  MonadGetActiveNetworkRpc,
+  MonadSetActiveNetworkRpc,
+  MonadListNetworksRpc,
+  MonadBlockHeightStreamRpc,
 );
 export type MemoizeRpcs = typeof MemoizeRpcs;
 
