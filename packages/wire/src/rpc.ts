@@ -118,6 +118,10 @@ import {
   MonadGetBlockNumberRpc,
   MonadListNetworksRpc,
   MonadSetActiveNetworkRpc,
+  WalletCreateBurnerRpc,
+  WalletGetBalanceRpc,
+  WalletListRpc,
+  WalletSignMessageRpc,
 } from "./monad.ts";
 
 /**
@@ -227,6 +231,11 @@ export const MemoizeRpcs = RpcGroup.make(
   MonadSetActiveNetworkRpc,
   MonadListNetworksRpc,
   MonadBlockHeightStreamRpc,
+  // Phase 2 wallet
+  WalletCreateBurnerRpc,
+  WalletListRpc,
+  WalletGetBalanceRpc,
+  WalletSignMessageRpc,
 );
 export type MemoizeRpcs = typeof MemoizeRpcs;
 
