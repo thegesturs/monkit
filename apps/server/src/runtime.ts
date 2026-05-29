@@ -203,6 +203,13 @@ export const makeMainLayer = (deps: MainLayerDeps) => {
     Layer.provide(WorkspaceLayer),
   );
 
+  // Wallet service needs SqlClient (for monad_wallets table metadata) and MonadCore.
+  // Pre-provide both dependencies when building the layer (safe pattern used by other services).
+  const MonadWalletLayer = MonadWalletServiceLive.pipe(
+    Layer.provide(MigratedSqlite),
+    Layer.provide(MonadLayer),
+  );
+
   const Handlers = HandlersLayer.pipe(
     Layer.provide(WorkspaceLayer),
     Layer.provide(PtyServiceLive),
@@ -219,7 +226,7 @@ export const makeMainLayer = (deps: MainLayerDeps) => {
     Layer.provide(SkillBridgeLayer),
     Layer.provide(IndexLayer),
     Layer.provide(MonadLayer),
-    Layer.provide(MonadWalletServiceLive),
+    Layer.provide(MonadWalletLayer),
     Layer.provide(FolderPickerLayer),
     // `agent.opencodeInventory` calls `resolveCliPath("opencode")` directly
     // (it spins up a short-lived `opencode serve` to read the user's
