@@ -12,6 +12,7 @@ export * from "./api.js";
 export * from "./networks.js";
 export * from "./rpc.js";
 export * from "./wallet.js";
+export * from "./devnet.js";
 
 // Branded IDs + errors + network primitives
 export * from "./schema.js";
