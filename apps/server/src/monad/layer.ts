@@ -11,8 +11,6 @@ import { NodeContext } from "@effect/platform-node";
  *  - Devnet / anvil lifecycle (PTY)
  *  - Deploy / compile services
  */
-export const MonadLayer = MonadCoreLive.pipe(
-  Layer.provide(NodeContext.layer),
-);
+export const MonadLayer = MonadCoreLive.pipe(Layer.provide(NodeContext.layer));
 
 export { MonadCore } from "@memoize/monad-core";

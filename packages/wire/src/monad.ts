@@ -3,19 +3,34 @@ import { Schema } from "effect";
 
 // Phase 1 minimal types (can be refined later)
 export const NetworkIdSchema = Schema.Literal("local", "testnet", "mainnet");
+export type NetworkId = typeof NetworkIdSchema.Type;
 
-export class NetworkConfig extends Schema.Class<NetworkConfig>("NetworkConfig")({
-  id: NetworkIdSchema,
-  chainId: Schema.Number,
-  name: Schema.String,
-  rpcUrl: Schema.String,
-  explorerUrl: Schema.NullOr(Schema.String),
-}) {}
+/**
+ * Surfaced RPC failure for the Monad domain. We attach this as the `error`
+ * channel of network calls so the renderer can show a real reason (and a
+ * Retry affordance) instead of silently hanging on "connecting…".
+ */
+export class MonadRpcError extends Schema.TaggedError<MonadRpcError>()(
+  "MonadRpcError",
+  { message: Schema.String },
+) {}
+
+export class NetworkConfig extends Schema.Class<NetworkConfig>("NetworkConfig")(
+  {
+    id: NetworkIdSchema,
+    chainId: Schema.Number,
+    name: Schema.String,
+    rpcUrl: Schema.String,
+    explorerUrl: Schema.NullOr(Schema.String),
+  },
+) {}
 
 export class BlockHeight extends Schema.Class<BlockHeight>("BlockHeight")({
   networkId: NetworkIdSchema,
   chainId: Schema.Number,
-  blockNumber: Schema.BigIntFromSelf,
+  // BigInt encoded as a string — JSON.stringify throws on a raw bigint, so
+  // BigIntFromSelf can't cross the JSON RPC boundary. Schema.BigInt is bigint↔string.
+  blockNumber: Schema.BigInt,
   updatedAt: Schema.DateFromString,
 }) {}
 
@@ -33,7 +48,9 @@ export const ListNetworksReq = Schema.Struct({});
 // RPC definitions
 export const MonadGetBlockNumberRpc = Rpc.make("monad.getBlockNumber", {
   payload: GetBlockNumberReq,
-  success: Schema.BigIntFromSelf,
+  // String-encoded bigint (see BlockHeight.blockNumber) so it survives JSON.
+  success: Schema.BigInt,
+  error: MonadRpcError,
 });
 
 export const MonadGetActiveNetworkRpc = Rpc.make("monad.getActiveNetwork", {
@@ -55,11 +72,14 @@ export const MonadListNetworksRpc = Rpc.make("monad.listNetworks", {
 export const MonadBlockHeightStreamRpc = Rpc.make("monad.blockHeightStream", {
   payload: GetBlockNumberReq,
   success: BlockHeight,
+  error: MonadRpcError,
   stream: true,
 });
 
 // ===== Phase 2: Wallet =====
-export class WalletMetadata extends Schema.Class<WalletMetadata>("WalletMetadata")({
+export class WalletMetadata extends Schema.Class<WalletMetadata>(
+  "WalletMetadata",
+)({
   id: Schema.String,
   address: Schema.String,
   label: Schema.NullOr(Schema.String),
@@ -70,6 +90,7 @@ export class WalletMetadata extends Schema.Class<WalletMetadata>("WalletMetadata
 export const WalletCreateBurnerRpc = Rpc.make("monad.wallet.createBurner", {
   payload: Schema.Struct({ label: Schema.optional(Schema.String) }),
   success: WalletMetadata,
+  error: MonadRpcError,
 });
 
 export const WalletListRpc = Rpc.make("monad.wallet.list", {
@@ -79,7 +100,9 @@ export const WalletListRpc = Rpc.make("monad.wallet.list", {
 
 export const WalletGetBalanceRpc = Rpc.make("monad.wallet.getBalance", {
   payload: Schema.Struct({ address: Schema.String }),
-  success: Schema.BigIntFromSelf,
+  // String-encoded bigint so the wei balance survives JSON serialization.
+  success: Schema.BigInt,
+  error: MonadRpcError,
 });
 
 export const WalletSignMessageRpc = Rpc.make("monad.wallet.signMessage", {
@@ -88,32 +111,57 @@ export const WalletSignMessageRpc = Rpc.make("monad.wallet.signMessage", {
     message: Schema.String,
   }),
   success: Schema.String, // signature
+  error: MonadRpcError,
 });
 
 // ===== Phase 3: Devnet + Compile + Deploy =====
+export const DevnetStatusSchema = Schema.Struct({
+  running: Schema.Boolean,
+  port: Schema.NullOr(Schema.Number),
+  chainId: Schema.Number,
+  url: Schema.NullOr(Schema.String),
+});
+
 export const DevnetStartRpc = Rpc.make("monad.devnet.start", {
   payload: Schema.Struct({}),
-  success: Schema.Struct({
-    running: Schema.Boolean,
-    port: Schema.NullOr(Schema.Number),
-    chainId: Schema.Number,
-    url: Schema.NullOr(Schema.String),
-  }),
+  success: DevnetStatusSchema,
+  error: MonadRpcError,
 });
 
 export const DevnetStopRpc = Rpc.make("monad.devnet.stop", {
   payload: Schema.Struct({}),
   success: Schema.Void,
+  error: MonadRpcError,
 });
 
 export const DevnetStatusRpc = Rpc.make("monad.devnet.status", {
   payload: Schema.Struct({}),
+  success: DevnetStatusSchema,
+  error: MonadRpcError,
+});
+
+// Compile the project's Foundry contracts and report what can be deployed.
+export class ConstructorInput extends Schema.Class<ConstructorInput>(
+  "ConstructorInput",
+)({
+  name: Schema.String,
+  type: Schema.String,
+}) {}
+
+export class CompiledContractInfo extends Schema.Class<CompiledContractInfo>(
+  "CompiledContractInfo",
+)({
+  name: Schema.String,
+  constructorInputs: Schema.Array(ConstructorInput),
+}) {}
+
+export const CompileRpc = Rpc.make("monad.deploy.compile", {
+  payload: Schema.Struct({ projectId: Schema.String }),
   success: Schema.Struct({
-    running: Schema.Boolean,
-    port: Schema.NullOr(Schema.Number),
-    chainId: Schema.Number,
-    url: Schema.NullOr(Schema.String),
+    foundryAvailable: Schema.Boolean,
+    contracts: Schema.Array(CompiledContractInfo),
   }),
+  error: MonadRpcError,
 });
 
 export class DeployRecord extends Schema.Class<DeployRecord>("DeployRecord")({
@@ -136,9 +184,11 @@ export const DeployContractRpc = Rpc.make("monad.deploy.contract", {
     network: Schema.String,
   }),
   success: DeployRecord,
+  error: MonadRpcError,
 });
 
 export const ListDeploysRpc = Rpc.make("monad.deploy.list", {
   payload: Schema.Struct({ projectId: Schema.String }),
   success: Schema.Array(DeployRecord),
+  error: MonadRpcError,
 });

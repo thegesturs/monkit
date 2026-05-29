@@ -1,4 +1,15 @@
-import { FolderClosed, GitBranch } from "lucide-react";
+import {
+  Compass,
+  FolderClosed,
+  GitBranch,
+  GitCompare,
+  GitPullRequest,
+  Globe,
+  Rocket,
+  ScrollText,
+  SquareTerminal,
+  Wallet,
+} from "lucide-react";
 import { useEffect } from "react";
 
 import { formatShortcut } from "../lib/shortcuts.ts";
@@ -13,6 +24,11 @@ import { EMPTY_WORKTREES, useWorktreesStore } from "../store/worktrees.ts";
 import { BrowserPane } from "./browser-pane.tsx";
 import { DiffPane } from "./diff-pane.tsx";
 import { FileTree } from "./file-tree.tsx";
+import { ContractsPanel } from "./monad/contracts-panel.tsx";
+import { DeployPanel } from "./monad/deploy-panel.tsx";
+import { ExplorerPanel } from "./monad/explorer-panel.tsx";
+import { MonadHeader } from "./monad/monad-header.tsx";
+import { WalletPanel } from "./monad/wallet-panel.tsx";
 import { PrPane } from "./pr-pane.tsx";
 import { RightPaneHeader } from "./right-pane-header.tsx";
 import { TerminalPane } from "./terminal-pane.tsx";
@@ -50,86 +66,83 @@ export function RightPane() {
   const tab = useUiStore((s) => s.activeRightTab);
   const setTab = useUiStore((s) => s.setActiveRightTab);
 
-  const monadStatus = useMonadStore((s) => s.statusText());
-  const startMonadStream = useMonadStore((s) => s.startBlockStream);
-  const stopMonadStream = useMonadStore((s) => s.stopBlockStream);
+  const startMonadPolling = useMonadStore((s) => s.startPolling);
+  const stopMonadPolling = useMonadStore((s) => s.stopPolling);
 
-  // Start the live Monad block height stream as soon as any project is open.
-  // (monkit is Monad-only; the stream is cheap and always relevant.)
+  // Poll the active Monad network for block height as soon as any project is
+  // open. (monkit is Monad-only; the poll is cheap and always relevant.)
   useEffect(() => {
     if (selectedFolderId) {
-      startMonadStream();
+      startMonadPolling();
     }
     return () => {
-      stopMonadStream();
+      stopMonadPolling();
     };
-  }, [selectedFolderId, startMonadStream, stopMonadStream]);
+  }, [selectedFolderId, startMonadPolling, stopMonadPolling]);
 
   return (
     <aside className="flex h-full min-h-0 w-full flex-col">
       {selected ? <RightPaneHeader projectName={selected.name} /> : null}
-      <div className="flex h-9 shrink-0 items-center gap-0.5 border-b border-border px-1 text-xs">
+      <div className="flex h-9 shrink-0 items-center gap-0.5 border-b border-border px-1.5 text-xs">
         <TabButton
           active={tab === "files"}
           onClick={() => setTab("files")}
-          label="Files"
+          icon={<FolderClosed />}
           tooltip="Browse project files"
         />
         <TabButton
           active={tab === "terminal"}
           onClick={() => setTab("terminal")}
-          label="Terminal"
+          icon={<SquareTerminal />}
           tooltip="Open a terminal in the project root"
           shortcut={formatShortcut("toggle-terminal")}
         />
         <TabButton
           active={tab === "changes"}
           onClick={() => setTab("changes")}
-          label="Changes"
+          icon={<GitCompare />}
           tooltip="Working-tree changes + commit"
           badge={renderChangesBadge(status?.dirtyFiles ?? 0)}
         />
         <TabButton
           active={tab === "pr"}
           onClick={() => setTab("pr")}
-          label="PR"
+          icon={<GitPullRequest />}
           tooltip="Pull request title, reviews, comments, and CI"
           badge={renderPrBadge(pr, details)}
         />
         <TabButton
           active={tab === "browser"}
           onClick={() => setTab("browser")}
-          label="Browser"
+          icon={<Globe />}
           tooltip="In-app browser for dev servers and references"
         />
 
         {/* Monad tab group — permanent in monkit (Monad-specialized fork) */}
-        <div className="ml-1 flex items-center gap-0.5 pl-1 text-[10px] font-medium text-muted-foreground">
-          MONAD
-        </div>
+        <div className="mx-1 h-4 w-px shrink-0 bg-border" aria-hidden="true" />
         <TabButton
           active={tab === "monad-wallet"}
           onClick={() => setTab("monad-wallet")}
-          label="Wallet"
-          tooltip="Burner wallet, balance, faucet, sign"
-        />
-        <TabButton
-          active={tab === "monad-contracts"}
-          onClick={() => setTab("monad-contracts")}
-          label="Contracts"
-          tooltip="ABI-driven read / write"
+          icon={<Wallet />}
+          tooltip="Wallet — burner, balance, faucet, sign"
         />
         <TabButton
           active={tab === "monad-deploy"}
           onClick={() => setTab("monad-deploy")}
-          label="Deploy"
-          tooltip="Compile + deploy to local / testnet / mainnet"
+          icon={<Rocket />}
+          tooltip="Deploy — compile + deploy to local / testnet"
+        />
+        <TabButton
+          active={tab === "monad-contracts"}
+          onClick={() => setTab("monad-contracts")}
+          icon={<ScrollText />}
+          tooltip="Contracts — ABI-driven read / write"
         />
         <TabButton
           active={tab === "monad-explorer"}
           onClick={() => setTab("monad-explorer")}
-          label="Explorer"
-          tooltip="Tx history + log decoder"
+          icon={<Compass />}
+          tooltip="Explorer — open transactions, blocks, addresses"
         />
       </div>
       <div className="flex min-h-0 flex-1 flex-col">
@@ -161,31 +174,27 @@ export function RightPane() {
               <BrowserPane />
             </div>
 
-            {/* Monad Phase 1 placeholder panes — live block height is the only real thing */}
-            <div hidden={tab !== "monad-wallet"} className="flex min-h-0 flex-1 flex-col p-3 text-xs text-muted-foreground">
-              <div className="mb-2 rounded border border-border bg-muted/30 px-2 py-1 font-mono text-[11px] text-foreground">
-                {monadStatus}
+            {/* Monad surface — every sub-tab shares one header (network +
+                connection status) so it reads as one cohesive product area. */}
+            {isMonadTab(tab) ? (
+              <div className="flex min-h-0 flex-1 flex-col">
+                <MonadHeader />
+                <div className="flex min-h-0 flex-1 flex-col">
+                  <div hidden={tab !== "monad-wallet"} className="flex min-h-0 flex-1 flex-col">
+                    <WalletPanel />
+                  </div>
+                  <div hidden={tab !== "monad-deploy"} className="flex min-h-0 flex-1 flex-col">
+                    <DeployPanel projectId={selected.id} />
+                  </div>
+                  <div hidden={tab !== "monad-contracts"} className="flex min-h-0 flex-1 flex-col">
+                    <ContractsPanel />
+                  </div>
+                  <div hidden={tab !== "monad-explorer"} className="flex min-h-0 flex-1 flex-col">
+                    <ExplorerPanel />
+                  </div>
+                </div>
               </div>
-              Wallet (Phase 2) — burner, balance, sign, faucet
-            </div>
-            <div hidden={tab !== "monad-contracts"} className="flex min-h-0 flex-1 flex-col p-3 text-xs text-muted-foreground">
-              <div className="mb-2 rounded border border-border bg-muted/30 px-2 py-1 font-mono text-[11px] text-foreground">
-                {monadStatus}
-              </div>
-              Contracts (Phase 4) — ABI-driven call / send UI
-            </div>
-            <div hidden={tab !== "monad-deploy"} className="flex min-h-0 flex-1 flex-col p-3 text-xs text-muted-foreground">
-              <div className="mb-2 rounded border border-border bg-muted/30 px-2 py-1 font-mono text-[11px] text-foreground">
-                {monadStatus}
-              </div>
-              Deploy (Phase 3) — forge build + deploy to any network
-            </div>
-            <div hidden={tab !== "monad-explorer"} className="flex min-h-0 flex-1 flex-col p-3 text-xs text-muted-foreground">
-              <div className="mb-2 rounded border border-border bg-muted/30 px-2 py-1 font-mono text-[11px] text-foreground">
-                {monadStatus}
-              </div>
-              Explorer (Phase 6) — decoded tx / event history
-            </div>
+            ) : null}
           </>
         )}
       </div>
@@ -294,14 +303,14 @@ function renderPrBadge(
 function TabButton({
   active,
   onClick,
-  label,
+  icon,
   tooltip,
   badge,
   shortcut,
 }: {
   active: boolean;
   onClick: () => void;
-  label: string;
+  icon: React.ReactNode;
   tooltip: string;
   badge?: React.ReactNode;
   shortcut?: string;
@@ -313,14 +322,16 @@ function TabButton({
           <button
             type="button"
             onClick={onClick}
-            className={`flex items-center gap-1.5 rounded px-2 py-1 text-[11px] transition-colors ${
+            className={`relative flex size-7 items-center justify-center rounded-md transition-colors [&_svg]:size-4 ${
               active
                 ? "bg-muted text-foreground"
                 : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
             }`}
           >
-            {label}
-            {badge}
+            {icon}
+            {badge !== undefined && badge !== null ? (
+              <span className="absolute -right-1 -top-1">{badge}</span>
+            ) : null}
           </button>
         }
       />
@@ -336,4 +347,9 @@ function TabButton({
       </TooltipPopup>
     </Tooltip>
   );
+}
+
+/** Whether the active right-pane tab belongs to the Monad surface. */
+function isMonadTab(tab: string): boolean {
+  return tab.startsWith("monad-");
 }
