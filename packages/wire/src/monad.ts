@@ -89,3 +89,56 @@ export const WalletSignMessageRpc = Rpc.make("monad.wallet.signMessage", {
   }),
   success: Schema.String, // signature
 });
+
+// ===== Phase 3: Devnet + Compile + Deploy =====
+export const DevnetStartRpc = Rpc.make("monad.devnet.start", {
+  payload: Schema.Struct({}),
+  success: Schema.Struct({
+    running: Schema.Boolean,
+    port: Schema.NullOr(Schema.Number),
+    chainId: Schema.Number,
+    url: Schema.NullOr(Schema.String),
+  }),
+});
+
+export const DevnetStopRpc = Rpc.make("monad.devnet.stop", {
+  payload: Schema.Struct({}),
+  success: Schema.Void,
+});
+
+export const DevnetStatusRpc = Rpc.make("monad.devnet.status", {
+  payload: Schema.Struct({}),
+  success: Schema.Struct({
+    running: Schema.Boolean,
+    port: Schema.NullOr(Schema.Number),
+    chainId: Schema.Number,
+    url: Schema.NullOr(Schema.String),
+  }),
+});
+
+export class DeployRecord extends Schema.Class<DeployRecord>("DeployRecord")({
+  id: Schema.String,
+  projectId: Schema.String,
+  network: Schema.String,
+  contractName: Schema.String,
+  address: Schema.String,
+  txHash: Schema.String,
+  blockNumber: Schema.NullOr(Schema.Number),
+  constructorArgsJson: Schema.NullOr(Schema.String),
+  deployedAt: Schema.String,
+}) {}
+
+export const DeployContractRpc = Rpc.make("monad.deploy.contract", {
+  payload: Schema.Struct({
+    projectId: Schema.String,
+    contractName: Schema.String,
+    constructorArgs: Schema.Array(Schema.Unknown),
+    network: Schema.String,
+  }),
+  success: DeployRecord,
+});
+
+export const ListDeploysRpc = Rpc.make("monad.deploy.list", {
+  payload: Schema.Struct({ projectId: Schema.String }),
+  success: Schema.Array(DeployRecord),
+});

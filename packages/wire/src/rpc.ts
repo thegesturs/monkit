@@ -122,6 +122,12 @@ import {
   WalletGetBalanceRpc,
   WalletListRpc,
   WalletSignMessageRpc,
+  // Phase 3
+  DevnetStartRpc,
+  DevnetStopRpc,
+  DevnetStatusRpc,
+  DeployContractRpc,
+  ListDeploysRpc,
 } from "./monad.ts";
 
 /**
@@ -236,6 +242,12 @@ export const MemoizeRpcs = RpcGroup.make(
   WalletListRpc,
   WalletGetBalanceRpc,
   WalletSignMessageRpc,
+  // Phase 3 devnet + deploy
+  DevnetStartRpc,
+  DevnetStopRpc,
+  DevnetStatusRpc,
+  DeployContractRpc,
+  ListDeploysRpc,
 );
 export type MemoizeRpcs = typeof MemoizeRpcs;
 

@@ -13,6 +13,7 @@ import { Migration0010NestedSessions } from "./migrations/0010_nested_sessions.t
 import { Migration0011ChatsTable } from "./migrations/0011_chats_table.ts";
 import { Migration0012ChatIdNotNull } from "./migrations/0012_chat_id_not_null.ts";
 import { Migration0013MonadWallets } from "./migrations/0013_monad_wallets.ts";
+import { Migration0014MonadDeploys } from "./migrations/0014_monad_deploys.ts";
 
 /**
  * Runs every numbered migration on boot. `fromRecord` keys must match
@@ -38,5 +39,6 @@ export const MigrationsLive = SqliteMigrator.layer({
     "0011_chats_table": Migration0011ChatsTable,
     "0012_chat_id_not_null": Migration0012ChatIdNotNull,
     "0013_monad_wallets": Migration0013MonadWallets,
+    "0014_monad_deploys": Migration0014MonadDeploys,
   }),
 });
