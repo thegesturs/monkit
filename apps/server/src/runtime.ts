@@ -27,6 +27,7 @@ import { FileSearchServiceLive } from "./workspace/layers/file-search.ts";
 import { WorkspaceServiceLive } from "./workspace/layers/workspace-service.ts";
 import { FolderPicker } from "./workspace/services/folder-picker.ts";
 import { WorktreeServiceLive } from "./worktree/layers/worktree-service.ts";
+import { MonadLayer } from "./monad/layer.ts";
 
 /**
  * Inputs to `makeMainLayer`. The host shell (today: Electron in
@@ -216,6 +217,7 @@ export const makeMainLayer = (deps: MainLayerDeps) => {
     Layer.provide(AttachmentLayer),
     Layer.provide(SkillBridgeLayer),
     Layer.provide(IndexLayer),
+    Layer.provide(MonadLayer),
     Layer.provide(FolderPickerLayer),
     // `agent.opencodeInventory` calls `resolveCliPath("opencode")` directly
     // (it spins up a short-lived `opencode serve` to read the user's

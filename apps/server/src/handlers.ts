@@ -8,6 +8,7 @@ import { GitHandlersLayer } from "./git/handlers.ts";
 import { PingHandlersLayer } from "./ping/handlers.ts";
 import { ProviderHandlersLayer } from "./provider/handlers.ts";
 import { PtyHandlersLayer } from "./pty/handlers.ts";
+import { MonadHandlersLayer } from "./monad/handlers.ts";
 import { RepositorySettingsHandlersLayer } from "./repository-settings/handlers.ts";
 import { SkillHandlersLayer } from "./skill/handlers.ts";
 import { WorkspaceHandlersLayer } from "./workspace/handlers.ts";
@@ -28,6 +29,7 @@ export const HandlersLayer = Layer.mergeAll(
   RepositorySettingsHandlersLayer,
   ConfigStoreHandlersLayer,
   ProviderHandlersLayer,
+  MonadHandlersLayer,
   FsHandlersLayer,
   AttachmentHandlersLayer,
   SkillHandlersLayer,

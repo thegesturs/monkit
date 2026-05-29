@@ -39,7 +39,11 @@ Fresh machine. User installs the app. Time-to-deployed-dApp on Monad testnet: **
 
 ## Status
 
-**Spec phase.** Nothing implemented yet. The codebase has zero blockchain code today.
+**Spec phase (adapted for monkit fork).** 
+
+**Important:** This repository (monkit) is a Monad-specialized fork of the parent Memoize Alpha project. Monad capabilities are **always on by default** — there is no "Monad mode" toggle or opt-in. Every project is treated as a Monad dApp project. The original 0.05-monad spec language about "toggling mode" and conditional UI has been adjusted accordingly during implementation (see Phase 1 PR).
+
+Nothing implemented yet at the start of the fork. The parent codebase had zero blockchain code.
 
 ## Relationship to prior MVPs
 
