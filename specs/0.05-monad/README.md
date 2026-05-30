@@ -4,25 +4,31 @@ The easiest way for vibe coders to build, test, and ship dApps on **Monad**, lay
 
 ## What this is
 
-A first-class **Monad mode** inside the existing Memoize Alpha desktop app. It does not replace the general AI coding agent — it sits next to it. When a project has Monad mode enabled, the user gets:
+A desktop environment where a vibe coder describes a **full-stack Monad dApp**, the AI builds the contract,
+the frontend, and the offchain backend, and one flow deploys it and gets it running — without the user
+understanding wallets, gas, RPC, or git. Monad is always on (every project is a Monad dApp). The user gets:
 
+- **Starter templates** (contract + Vite/React frontend + Convex backend) the AI scaffolds from — build these first
+- An offchain backend via **Convex** (DB + auth), auto-provisioned, with an in-app data panel
 - A managed local Monad-compatible devnet (auto-spawned anvil with Monad chain id)
 - A burner wallet (keychain-stored) + WalletConnect bridge for real wallets
 - One-click compile + deploy of Foundry contracts to local / testnet / mainnet
 - Auto-generated TypeScript bindings (addresses, ABIs, wagmi v2 hooks) written into the frontend on deploy
-- An ABI-driven contract interaction panel
-- A built-in tx/log explorer
+- An ABI-driven contract interaction panel and a built-in tx/log explorer
 - AI agents (Claude, Codex, Grok, Gemini, Cursor, OpenCode) with MCP tools for `monad_deploy`, `monad_call`, `monad_read`, `monad_balance`, `monad_sign_message`, `monad_publish`
 - Composer slash commands: `/deploy`, `/call`, `/read`, `/switch-net`, `/wallet`
-- A starter template (Foundry + Vite + wagmi v2) that the AI is pre-trained on
+- A **Simple mode** (default) that hides developer machinery (PR, git diffs) and surfaces only the running app
+- A pinned **Project Plan** panel so the agent works a clean, visible checklist and you always see the live step
 
 ## Target user
 
-The vibe coder who wants to:
+The vibe coder — who may never have touched Monad, and may not be a developer — who wants to:
 
-> "Open the app → tell the AI what to build → see contracts and a frontend appear → click Deploy → see it work on Monad testnet → share an IPFS URL."
+> "Open the app → tell the AI what to build → see a contract, a frontend, and a database appear → see it
+> running in the app → share a live URL."
 
-Zero Solidity setup, zero RPC config, zero ABI copy-paste. The agent and the tooling do that.
+Zero Solidity setup, zero RPC config, zero ABI copy-paste, zero database/auth setup, zero git. The agent
+and the tooling do all of it; Simple mode hides everything they don't need to see.
 
 ## North-star UX
 
@@ -33,7 +39,11 @@ Fresh machine. User installs the app. Time-to-deployed-dApp on Monad testnet: **
 - [vision.md](./vision.md) — north-star UX, design principles, what "good" looks like
 - [architecture.md](./architecture.md) — package layout, service graph, security model
 - [roadmap.md](./roadmap.md) — phased delivery, Phase 1 → Phase 6
-- [features/](./features) — one file per feature, all designed up-front
+- [features/](./features) — one file per feature, all designed up-front. Start here for the current direction:
+  - [features/templates.md](./features/templates.md) — **build first** — the starters the agent scaffolds from
+  - [features/convex-backend.md](./features/convex-backend.md) — offchain DB + auth via Convex
+  - [features/simple-mode.md](./features/simple-mode.md) — the default vibe-coder UX (hides dev machinery)
+  - [features/project-plan.md](./features/project-plan.md) — pinned plan panel showing the live step
 - [decisions/](./decisions) — ADRs for the key choices (anvil vs. monad-node, viem vs. ethers, etc.)
 - [phases/](./phases) — phase-by-phase execution checklists
 
