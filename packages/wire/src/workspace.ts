@@ -26,10 +26,42 @@ export class WorkspaceInvalidPathError extends Schema.TaggedError<WorkspaceInval
   { path: Schema.String, reason: Schema.String },
 ) {}
 
+/**
+ * Available starter templates the agent scaffolds from. One bare general-purpose
+ * full-stack starter for now; a single-member union is intentional — adding a
+ * second general starter later is an additive change here + a new `templates/` dir.
+ */
+export const TemplateId = Schema.Literal("fullstack-monad-convex");
+export type TemplateId = typeof TemplateId.Type;
+
+export class WorkspaceScaffoldError extends Schema.TaggedError<WorkspaceScaffoldError>()(
+  "WorkspaceScaffoldError",
+  { reason: Schema.String },
+) {}
+
 export const WorkspaceAddRpc = Rpc.make("workspace.add", {
   payload: Schema.Struct({ path: Schema.String }),
   success: Folder,
   error: Schema.Union(WorkspaceDuplicatePathError, WorkspaceInvalidPathError),
+});
+
+/**
+ * Scaffold a new project from a bundled starter template: copy the template
+ * tree into `parentDir/name`, register it as a project, and return the Folder.
+ * `parentDir` defaults server-side when omitted.
+ */
+export const WorkspaceScaffoldTemplateRpc = Rpc.make("workspace.scaffoldTemplate", {
+  payload: Schema.Struct({
+    template: TemplateId,
+    name: Schema.String,
+    parentDir: Schema.optional(Schema.String),
+  }),
+  success: Folder,
+  error: Schema.Union(
+    WorkspaceScaffoldError,
+    WorkspaceDuplicatePathError,
+    WorkspaceInvalidPathError,
+  ),
 });
 
 export const WorkspaceListRpc = Rpc.make("workspace.list", {

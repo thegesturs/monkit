@@ -3,9 +3,11 @@ import { Context, type Effect } from "effect";
 import {
   type Folder,
   type FolderId,
+  type TemplateId,
   type WorkspaceDuplicatePathError,
   type WorkspaceInvalidPathError,
   type WorkspaceNotFoundError,
+  type WorkspaceScaffoldError,
 } from "@memoize/wire";
 
 export interface WorkspaceServiceShape {
@@ -14,6 +16,21 @@ export interface WorkspaceServiceShape {
   ) => Effect.Effect<
     Folder,
     WorkspaceDuplicatePathError | WorkspaceInvalidPathError
+  >;
+  /**
+   * Scaffold a new project from a bundled starter template into
+   * `parentDir/name` (parentDir defaults when omitted), register it, and
+   * return the Folder.
+   */
+  readonly scaffoldTemplate: (input: {
+    readonly template: TemplateId;
+    readonly name: string;
+    readonly parentDir?: string | undefined;
+  }) => Effect.Effect<
+    Folder,
+    | WorkspaceScaffoldError
+    | WorkspaceDuplicatePathError
+    | WorkspaceInvalidPathError
   >;
   readonly list: () => Effect.Effect<ReadonlyArray<Folder>>;
   readonly remove: (

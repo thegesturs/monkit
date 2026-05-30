@@ -11,6 +11,7 @@ import {
   Plus,
   Settings,
   Shield,
+  Sparkles,
   SquarePen,
   Trash2,
 } from "lucide-react";
@@ -172,6 +173,7 @@ export function ProjectsSidebar() {
   const loading = useWorkspaceStore((s) => s.loading);
   const load = useWorkspaceStore((s) => s.load);
   const add = useWorkspaceStore((s) => s.add);
+  const scaffoldFromTemplate = useWorkspaceStore((s) => s.scaffoldFromTemplate);
   const remove = useWorkspaceStore((s) => s.remove);
   const select = useWorkspaceStore((s) => s.select);
 
@@ -271,6 +273,13 @@ export function ProjectsSidebar() {
   useSessionRunningSubscriptions(allSessionIds);
 
   const onAddProject = () => void add();
+  const onNewFromTemplate = () => {
+    const name = window.prompt("Name your new Monad app", "my-monad-app");
+    if (name === null) return;
+    const trimmed = name.trim();
+    if (trimmed.length === 0) return;
+    void scaffoldFromTemplate(trimmed);
+  };
   const onToggleExpanded = (id: FolderId) =>
     setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
 
@@ -278,26 +287,45 @@ export function ProjectsSidebar() {
     <aside className="flex h-full min-h-0 w-full flex-col backdrop-blur-3xl text-sidebar-foreground">
       <div className="flex items-center justify-between px-3 py-2 text-xs text-muted-foreground">
         <span>Projects</span>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <button
-                type="button"
-                onClick={onAddProject}
-                className="rounded p-1 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-                aria-label="Add project"
-              >
-                <Plus className="size-3.5" />
-              </button>
-            }
-          />
-          <TooltipPopup>
-            <TooltipShortcut
-              label="Add project"
-              shortcut={formatShortcut("open-project")}
+        <div className="flex items-center gap-0.5">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  onClick={onNewFromTemplate}
+                  className="rounded p-1 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                  aria-label="New Monad app from template"
+                >
+                  <Sparkles className="size-3.5" />
+                </button>
+              }
             />
-          </TooltipPopup>
-        </Tooltip>
+            <TooltipPopup>
+              <TooltipShortcut label="New Monad app from template" shortcut="" />
+            </TooltipPopup>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  onClick={onAddProject}
+                  className="rounded p-1 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                  aria-label="Add project"
+                >
+                  <Plus className="size-3.5" />
+                </button>
+              }
+            />
+            <TooltipPopup>
+              <TooltipShortcut
+                label="Add project"
+                shortcut={formatShortcut("open-project")}
+              />
+            </TooltipPopup>
+          </Tooltip>
+        </div>
       </div>
 
       {(error ?? chatsError ?? sessionsError) !== null && (

@@ -12,6 +12,7 @@ type WorkspaceState = {
   error: string | null;
   load: () => Promise<void>;
   add: () => Promise<void>;
+  scaffoldFromTemplate: (name: string) => Promise<void>;
   remove: (folderId: FolderId) => Promise<void>;
   select: (folderId: FolderId) => Promise<void>;
 };
@@ -68,6 +69,29 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       const path = await Effect.runPromise(client.workspace.pickFolder({}));
       if (path === null) return;
       const folder = await Effect.runPromise(client.workspace.add({ path }));
+      set((s) => ({
+        folders: [...s.folders, folder],
+        selectedFolderId: folder.id,
+      }));
+      await persistSelection(folder.id);
+    } catch (err) {
+      set({ error: formatError(err) });
+    }
+  },
+  scaffoldFromTemplate: async (name) => {
+    set({ error: null });
+    try {
+      const client = await getRpcClient();
+      // Pick the parent directory; the template is created as `parentDir/name`.
+      const parentDir = await Effect.runPromise(client.workspace.pickFolder({}));
+      if (parentDir === null) return;
+      const folder = await Effect.runPromise(
+        client.workspace.scaffoldTemplate({
+          template: "fullstack-monad-convex",
+          name,
+          parentDir,
+        }),
+      );
       set((s) => ({
         folders: [...s.folders, folder],
         selectedFolderId: folder.id,

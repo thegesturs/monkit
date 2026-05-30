@@ -103,6 +103,7 @@ import {
   WorkspaceListRpc,
   WorkspacePickFolderRpc,
   WorkspaceRemoveRpc,
+  WorkspaceScaffoldTemplateRpc,
   WorkspaceSearchFilesRpc,
   WorkspaceSetSelectedRpc,
 } from "./workspace.ts";
@@ -146,6 +147,7 @@ export const MemoizeRpcs = RpcGroup.make(
   WorkspaceGetSelectedRpc,
   WorkspaceSetSelectedRpc,
   WorkspaceSearchFilesRpc,
+  WorkspaceScaffoldTemplateRpc,
   PtyOpenRpc,
   PtyWriteRpc,
   PtyResizeRpc,
