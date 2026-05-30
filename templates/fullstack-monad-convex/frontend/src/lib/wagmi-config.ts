@@ -1,6 +1,6 @@
+import { defineChain } from "viem";
 import { http, createConfig } from "wagmi";
 import { injected } from "wagmi/connectors";
-import { defineChain } from "viem";
 
 // Chain definitions mirror packages/monad-core/networks.ts. The app injects a
 // burner wallet on the local devnet; the injected() connector lets a browser

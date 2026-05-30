@@ -31,6 +31,17 @@ Convex functions are queries/mutations in `frontend/convex/*.ts`; the schema is
 backend URL is injected as `VITE_CONVEX_URL`; until it's provisioned, Convex-backed widgets show a
 "backend starting…" state — don't remove that guard.
 
+## Frontend conventions
+
+- **Files are kebab-case** (`counter-card.tsx`, `not-found.tsx`). Components live in
+  `frontend/src/components/`, pages in `frontend/src/pages/`, shared code in `frontend/src/lib/`.
+- **UI uses shadcn/ui** — reuse primitives in `frontend/src/components/ui/` (button, card, badge) and add
+  more with the shadcn pattern. Merge classes with `cn()` from `@/lib/utils`. Import via the `@/` alias.
+- **Styling is Tailwind v4** with theme tokens in `src/index.css` (dark by default). Prefer tokens
+  (`bg-card`, `text-muted-foreground`) over hard-coded colors.
+- **Lint + format with Biome**: `bun run lint`, `bun run format`. Keep the tree clean.
+- Toasts via `sonner` (`toast.success(...)`); routing via `react-router-dom`.
+
 ## Work the plan visibly
 
 For any multi-step build:
