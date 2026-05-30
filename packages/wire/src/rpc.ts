@@ -126,6 +126,7 @@ import {
   DevnetStartRpc,
   DevnetStopRpc,
   DevnetStatusRpc,
+  CompileRpc,
   DeployContractRpc,
   ListDeploysRpc,
 } from "./monad.ts";
@@ -246,6 +247,7 @@ export const MemoizeRpcs = RpcGroup.make(
   DevnetStartRpc,
   DevnetStopRpc,
   DevnetStatusRpc,
+  CompileRpc,
   DeployContractRpc,
   ListDeploysRpc,
 );

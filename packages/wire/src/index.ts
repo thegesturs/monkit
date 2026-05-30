@@ -7,6 +7,7 @@ export * from "./git.ts";
 export * from "./ids.ts";
 export * from "./keybindings.ts";
 export * from "./keybindings-parse.ts";
+export * from "./monad.ts";
 export * from "./permission.ts";
 export * from "./ping.ts";
 export * from "./pty.ts";

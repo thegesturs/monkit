@@ -13,6 +13,8 @@ export * from "./networks.js";
 export * from "./rpc.js";
 export * from "./wallet.js";
 export * from "./devnet.js";
+export * from "./compile.js";
+export * from "./deploy.js";
 
 // Branded IDs + errors + network primitives
 export * from "./schema.js";

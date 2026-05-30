@@ -41,7 +41,6 @@ export interface MonadWalletServiceShape {
   readonly getBalance: (address: Address) => Effect.Effect<bigint, Error>;
 }
 
-export class MonadWalletService extends Context.Tag("memoize/MonadWalletService")<
-  MonadWalletService,
-  MonadWalletServiceShape
->() {}
+export class MonadWalletService extends Context.Tag(
+  "memoize/MonadWalletService",
+)<MonadWalletService, MonadWalletServiceShape>() {}

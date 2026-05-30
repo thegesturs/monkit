@@ -29,6 +29,7 @@ import { FolderPicker } from "./workspace/services/folder-picker.ts";
 import { WorktreeServiceLive } from "./worktree/layers/worktree-service.ts";
 import { MonadLayer } from "./monad/layer.ts";
 import { MonadWalletServiceLive } from "./monad/layers/monad-wallet-service.ts";
+import { MonadDeployServiceLive } from "./monad/layers/monad-deploy-service.ts";
 
 /**
  * Inputs to `makeMainLayer`. The host shell (today: Electron in
@@ -210,6 +211,13 @@ export const makeMainLayer = (deps: MainLayerDeps) => {
     Layer.provide(MonadLayer),
   );
 
+  // Deploy service needs SqlClient (project path + monad_deploys + wallet
+  // metadata lookup). Signing reads the burner key from the OS keychain
+  // directly; compile/deploy/devnet use monad-core + node child processes.
+  const MonadDeployLayer = MonadDeployServiceLive.pipe(
+    Layer.provide(MigratedSqlite),
+  );
+
   const Handlers = HandlersLayer.pipe(
     Layer.provide(WorkspaceLayer),
     Layer.provide(PtyServiceLive),
@@ -227,6 +235,7 @@ export const makeMainLayer = (deps: MainLayerDeps) => {
     Layer.provide(IndexLayer),
     Layer.provide(MonadLayer),
     Layer.provide(MonadWalletLayer),
+    Layer.provide(MonadDeployLayer),
     Layer.provide(FolderPickerLayer),
     // `agent.opencodeInventory` calls `resolveCliPath("opencode")` directly
     // (it spins up a short-lived `opencode serve` to read the user's

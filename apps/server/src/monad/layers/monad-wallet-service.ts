@@ -1,9 +1,15 @@
 import keytar from "keytar";
 import { Effect, Layer } from "effect";
-import { generateBurnerWallet, privateKeyToViemAccount } from "@memoize/monad-core";
+import {
+  generateBurnerWallet,
+  privateKeyToViemAccount,
+} from "@memoize/monad-core";
 import { SqlClient } from "@effect/sql";
 
-import { MonadWalletService, type WalletMetadata } from "../services/monad-wallet-service.ts";
+import {
+  MonadWalletService,
+  type WalletMetadata,
+} from "../services/monad-wallet-service.ts";
 import { MonadCore } from "../layer.ts";
 
 const SERVICE_NAME = "memoize";
@@ -36,7 +42,11 @@ export const MonadWalletServiceLive = Layer.effect(
 
         // 2. Store private key in OS keychain (never in DB)
         yield* tryKeychain(() =>
-          keytar.setPassword(SERVICE_NAME, keychainAccountFor(address), privateKey),
+          keytar.setPassword(
+            SERVICE_NAME,
+            keychainAccountFor(address),
+            privateKey,
+          ),
         );
 
         return {
@@ -76,7 +86,9 @@ export const MonadWalletServiceLive = Layer.effect(
         );
 
         if (!pk) {
-          return yield* Effect.fail(new Error(`No private key found for wallet ${address}`));
+          return yield* Effect.fail(
+            new Error(`No private key found for wallet ${address}`),
+          );
         }
 
         const account = privateKeyToViemAccount(pk as `0x${string}`);
