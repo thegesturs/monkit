@@ -23,7 +23,7 @@ the full-stack/Convex and Simple-mode phases.
 **Goal:** A working full-stack starter exists and can be scaffolded in seconds. This is the foundation the
 agent builds on and the first new slice to ship. See [features/templates.md](./features/templates.md).
 
-- New `templates/` dir with `fullstack-monad-convex` (base), `nft-mint`, `erc20-launchpad`, `onchain-mini-app`.
+- New `templates/` dir with a single bare starter, `fullstack-monad-convex` (no app-specific variants).
 - Base skeleton: Foundry `contracts/` + Vite/React `frontend/` (wagmi v2 + viem) + `convex/` (schema + Convex Auth) + `AGENTS.md` + `monad.config.json`.
 - New `workspace.scaffoldTemplate` RPC + handler + service (copy template → register project → install deps → spawn local devnet + local Convex backend). Reuses the existing folder-add path.
 - Local Convex backend runs with no login wall (see [features/convex-backend.md](./features/convex-backend.md)).

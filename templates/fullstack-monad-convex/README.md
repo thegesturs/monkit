@@ -18,12 +18,10 @@ contracts/                 Foundry — Solidity contracts + tests
 frontend/
   src/
     components/
-      ui/                  shadcn/ui primitives (button, card, badge)
+      ui/                  shadcn/ui primitives (button, card)
       header.tsx           wallet connect
-      counter-card.tsx     on-chain counter (wagmi)
-      leaderboard.tsx      off-chain leaderboard (Convex)
     pages/
-      index.tsx            home
+      index.tsx            home (starter shell)
       not-found.tsx        404
     lib/
       wagmi-config.ts      Monad chains (local + testnet)
@@ -34,8 +32,7 @@ frontend/
     main.tsx               providers (wagmi, react-query, convex, router)
     index.css              Tailwind v4 + theme tokens
   convex/                  Convex backend
-    schema.ts              off-chain tables (leaderboard, etc.)
-    counter.ts             queries / mutations
+    schema.ts              off-chain tables (example table — replace)
     auth.config.ts         Convex Auth (wired further in Phase 7)
   components.json          shadcn config
   biome.json               lint + format

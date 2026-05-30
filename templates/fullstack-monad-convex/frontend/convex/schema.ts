@@ -1,11 +1,11 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
-// Off-chain tables. Onchain stays minimal (the Counter value); user-facing
-// state like the leaderboard lives here. Add accounts, profiles, sessions, etc.
+// Off-chain data lives here — accounts, profiles, feeds, leaderboards, sessions.
+// On-chain stays minimal (value / ownership / trust-critical logic).
+// Replace the example table below with your app's data.
 export default defineSchema({
-  scores: defineTable({
-    player: v.string(),
-    count: v.number(),
-  }).index("by_player", ["player"]),
+  examples: defineTable({
+    text: v.string(),
+  }),
 });

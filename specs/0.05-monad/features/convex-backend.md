@@ -21,8 +21,8 @@ Encoded in template `AGENTS.md` so the agent applies it automatically:
 | Token / NFT state | Leaderboards, scores, match history |
 | Anything others must verify | Feeds, comments, mutable app data |
 
-`onchain-mini-app` is the canonical demo: tips/score onchain where it matters, leaderboard + profiles in
-Convex.
+Canonical example: a counter/score onchain where it matters, with the leaderboard + profiles in Convex —
+the kind of thing the agent builds on top of the bare starter.
 
 ## What ships in the template
 

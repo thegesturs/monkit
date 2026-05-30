@@ -1,26 +1,19 @@
-import { CounterCard } from "@/components/counter-card";
 import { Header } from "@/components/header";
-import { Leaderboard } from "@/components/leaderboard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { convex } from "@/lib/convex-client";
 
 export default function Index() {
   return (
-    <div className="mx-auto flex max-w-2xl flex-col gap-5 px-5 py-8">
+    <div className="mx-auto flex max-w-2xl flex-col gap-5 px-5 py-10">
       <Header />
-      <CounterCard />
-      {convex ? (
-        <Leaderboard />
-      ) : (
-        <Card>
-          <CardHeader>
-            <CardTitle>Leaderboard</CardTitle>
-          </CardHeader>
-          <CardContent className="text-sm text-muted-foreground">
-            Backend starting… (Convex provisions on setup)
-          </CardContent>
-        </Card>
-      )}
+      <Card>
+        <CardHeader>
+          <CardTitle>Your Monad dApp</CardTitle>
+        </CardHeader>
+        <CardContent className="text-sm text-muted-foreground">
+          A bare full-stack starter wired for Monad: a Foundry contract, this React + shadcn/ui
+          frontend, and a Convex backend. Tell the agent what to build.
+        </CardContent>
+      </Card>
     </div>
   );
 }

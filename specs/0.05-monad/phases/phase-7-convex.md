@@ -67,7 +67,7 @@ See [features/convex-backend.md](../features/convex-backend.md).
 
 ## Verification
 
-1. Scaffold `onchain-mini-app` (or `fullstack-monad-convex`) → the local Convex backend starts with **no
+1. Scaffold `fullstack-monad-convex` → the local Convex backend starts with **no
    login prompt**; the frontend connects and Convex-backed widgets leave the "backend starting…" state.
 2. Open the **Convex** panel → tables are listed; interacting with the app (e.g. submitting a score) adds
    rows visible live.
