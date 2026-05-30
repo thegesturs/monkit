@@ -35,8 +35,9 @@ backend URL is injected as `VITE_CONVEX_URL`; until it's provisioned, Convex-bac
 
 - **Files are kebab-case** (`counter-card.tsx`, `not-found.tsx`). Components live in
   `frontend/src/components/`, pages in `frontend/src/pages/`, shared code in `frontend/src/lib/`.
-- **UI uses shadcn/ui** — reuse primitives in `frontend/src/components/ui/` (button, card, badge) and add
-  more with the shadcn pattern. Merge classes with `cn()` from `@/lib/utils`. Import via the `@/` alias.
+- **UI uses shadcn/ui** — the **full set is already vendored** in `frontend/src/components/ui/`; just
+  import what you need (no need to re-add via the CLI). Merge classes with `cn()` from `@/lib/utils`.
+  Import via the `@/` alias. These files are excluded from Biome (vendored).
 - **Styling is Tailwind v4** with theme tokens in `src/index.css` (dark by default). Prefer tokens
   (`bg-card`, `text-muted-foreground`) over hard-coded colors.
 - **Lint + format with Biome**: `bun run lint`, `bun run format`. Keep the tree clean.

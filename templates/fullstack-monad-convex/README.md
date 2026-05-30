@@ -18,8 +18,9 @@ contracts/                 Foundry — Solidity contracts + tests
 frontend/
   src/
     components/
-      ui/                  shadcn/ui primitives (button, card)
+      ui/                  full shadcn/ui set (~50 components) — vendored
       header.tsx           wallet connect
+    hooks/                 shadcn hooks (use-mobile)
     pages/
       index.tsx            home (starter shell)
       not-found.tsx        404

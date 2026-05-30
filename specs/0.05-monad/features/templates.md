@@ -22,8 +22,10 @@ baseline the agent builds *on top of* — not an app. We deliberately do **not**
 |---|---|---|
 | **`fullstack-monad-convex`** (the only one) | Bare full-stack starter: a Foundry contract + Vite/React + wagmi/viem frontend (shadcn/ui, dark theme) + Convex backend (DB + auth), all wired for Monad. No demo features — just the canvas. | ✅ wired |
 
-It must stay **bare**: shadcn primitives + Monad wiring + Convex wiring, ready to deploy, with a minimal
-starter shell — no feature components, no demo screens. The agent fills in the actual app.
+It must stay **bare** in the sense that matters: no feature components, no demo screens — just the canvas.
+"Bare" does **not** mean stripped-down libraries: the **full shadcn/ui component set is vendored** (so the
+agent can use any component without installing), plus Monad wiring + Convex wiring, ready to deploy. The
+agent fills in the actual app.
 
 > Possible future addition (not now): a single `onchain-mini-app` general starter, *if* it proves to open
 > many directions. Resist adding anything more specific than that. Fewer templates, more general.
@@ -43,8 +45,9 @@ my-app/
   frontend/
     src/
       components/
-        ui/                   # shadcn/ui primitives (button, card) — bare
+        ui/                   # full shadcn/ui set (~50 components), vendored — excluded from Biome
         header.tsx            # wallet connect
+      hooks/                  # shadcn hooks (use-mobile)
       pages/                  # index.tsx (starter shell) + not-found.tsx
       lib/                    # wagmi-config.ts (Monad chains), convex-client.ts, utils.ts (cn)
       contracts/              # @generated codegen target (addresses.ts, abis.ts) — written on deploy

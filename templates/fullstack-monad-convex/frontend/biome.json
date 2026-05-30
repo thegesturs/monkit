@@ -2,7 +2,14 @@
   "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
   "files": {
-    "ignore": ["dist", "convex/_generated", "src/contracts/abis.ts", "src/contracts/addresses.ts"]
+    "ignore": [
+      "dist",
+      "convex/_generated",
+      "src/contracts/abis.ts",
+      "src/contracts/addresses.ts",
+      "src/components/ui",
+      "src/hooks/use-mobile.ts"
+    ]
   },
   "organizeImports": { "enabled": true },
   "linter": {
