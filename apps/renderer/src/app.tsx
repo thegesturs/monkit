@@ -271,11 +271,51 @@ function MainShell() {
     const panel = rightPanelRef.current;
     if (panel === null) return;
     const collapsed = panel.isCollapsed();
-    // Force the right pane closed while no project is selected.
-    const shouldOpen = !noProject && rightSidebarOpen;
-    if (shouldOpen && collapsed) panel.expand();
-    if (!shouldOpen && !collapsed) panel.collapse();
-  }, [rightPanelRef, rightSidebarOpen, noProject]);
+    if (rightSidebarOpen && collapsed) panel.expand();
+    if (!rightSidebarOpen && !collapsed) panel.collapse();
+  }, [rightPanelRef, rightSidebarOpen]);
+
+  // Empty state: no project selected. Render a minimal two-pane shell — the
+  // sidebar plus a full-width main that hosts the launch screen. No top bar,
+  // no right pane, so the launch surface owns the whole main area.
+  if (noProject) {
+    return (
+      <div className="dark flex h-dvh max-h-dvh min-h-0 w-screen overflow-hidden text-foreground">
+        <Group
+          id="memoize.shell.empty.v1"
+          orientation="horizontal"
+          className="flex-1"
+        >
+          <Panel
+            id="projects"
+            defaultSize="18%"
+            minSize="180px"
+            maxSize="40%"
+            collapsible
+            collapsedSize="0%"
+            panelRef={leftPanelRef}
+            onResize={(size) => {
+              const open = size.asPercentage > 0;
+              if (open !== leftSidebarOpen) setLeftSidebarOpen(open);
+            }}
+          >
+            <div className="flex h-full min-h-0 flex-col bg-background/20">
+              <TopBarLeft />
+              <div className="flex min-h-0 flex-1 flex-col">
+                <ProjectsSidebar />
+              </div>
+            </div>
+          </Panel>
+          <Separator className="w-px bg-border transition-colors hover:bg-foreground/20 active:bg-foreground/30" />
+          <Panel id="main" minSize="30%">
+            <main className="flex h-full min-h-0 min-w-0 flex-col bg-background/70 backdrop-blur-3xl">
+              <ChatLanding />
+            </main>
+          </Panel>
+        </Group>
+      </div>
+    );
+  }
 
   return (
     <div className="dark flex h-dvh max-h-dvh min-h-0 w-screen overflow-hidden text-foreground">
@@ -309,17 +349,13 @@ function MainShell() {
         <Separator className="w-px bg-border transition-colors hover:bg-foreground/20 active:bg-foreground/30" />
         <Panel id="main" minSize="30%">
           <main className="flex h-full min-h-0 min-w-0 flex-col bg-background/70 backdrop-blur-3xl">
-            {!noProject && (
-              <>
-                <TopBarMain />
-                <UpdateBanner />
-                <IndexProgressBanner />
-                <MainTabs
-                  projectId={selectedFolderId}
-                  emptyLabel={emptyTabLabel}
-                />
-              </>
-            )}
+            <TopBarMain />
+            <UpdateBanner />
+            <IndexProgressBanner />
+            <MainTabs
+              projectId={selectedFolderId}
+              emptyLabel={emptyTabLabel}
+            />
             <div
               hidden={activeMainTab !== "chat"}
               className="flex min-h-0 flex-1 flex-col"
@@ -371,9 +407,7 @@ function MainShell() {
             )}
           </main>
         </Panel>
-        {!noProject && (
-          <Separator className="w-px bg-border transition-colors hover:bg-foreground/20 active:bg-foreground/30" />
-        )}
+        <Separator className="w-px bg-border transition-colors hover:bg-foreground/20 active:bg-foreground/30" />
         <Panel
           id="files"
           defaultSize="22%"
