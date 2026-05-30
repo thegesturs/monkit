@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "frontendDir": "frontend",
+  "contractsDir": "contracts",
+  "outDir": "contracts/out",
+  "networks": {
+    "default": "local"
+  },
+  "contracts": [
+    { "name": "Counter", "src": "contracts/src/Counter.sol" }
+  ]
+}
