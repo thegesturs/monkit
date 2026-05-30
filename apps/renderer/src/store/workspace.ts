@@ -43,21 +43,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const client = await getRpcClient();
-      const [folders, persisted] = await Promise.all([
-        Effect.runPromise(client.workspace.list({})),
-        Effect.runPromise(client.workspace.getSelected({})),
-      ]);
-      // Prefer the persisted selection if its folder still exists; otherwise
-      // pick the first folder so the UI is never in a "have folders, none
-      // selected" limbo on cold start.
-      const selected =
-        persisted !== null && folders.some((f) => f.id === persisted)
-          ? persisted
-          : (folders[0]?.id ?? null);
-      set({ folders, selectedFolderId: selected, loading: false });
-      // If we fell back to first-folder, persist that so the next launch
-      // restores the same one without re-running the fallback.
-      if (selected !== persisted) await persistSelection(selected);
+      const folders = await Effect.runPromise(client.workspace.list({}));
+      // Start with NO project selected — the app opens on the empty launch
+      // surface so the user starts directly, rather than jumping into a repo.
+      // Selection happens by explicit user action (sidebar / launch flow).
+      set({ folders, selectedFolderId: null, loading: false });
     } catch (err) {
       set({ error: formatError(err), loading: false });
     }
