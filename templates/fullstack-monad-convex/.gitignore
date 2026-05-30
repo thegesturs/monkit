@@ -1,0 +1,23 @@
+node_modules
+.DS_Store
+
+# Foundry
+contracts/out
+contracts/cache
+contracts/lib
+contracts/broadcast
+
+# Lockfiles (scaffold installs fresh)
+bun.lock
+bun.lockb
+frontend/bun.lock
+
+# Frontend
+frontend/dist
+frontend/node_modules
+
+# Env / secrets
+.env
+.env.local
+frontend/.env
+frontend/.env.local

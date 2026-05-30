@@ -14,51 +14,62 @@ one-prompt loop, before the UX work.** A working template + a scaffold path is t
 
 ## Templates shipped
 
-All four share one skeleton (below); the focused variants extend the base.
+**One general-purpose template. Keep it that way.** A template is a bare starter repo — the clean
+baseline the agent builds *on top of* — not an app. We deliberately do **not** ship app-specific templates
+(NFT mint, token launchpad, etc.); those are things the agent builds, not things we pre-bake.
 
 | Template | What it is | Convex |
 |---|---|---|
-| **`fullstack-monad-convex`** (default / base) | Foundry contract + Vite/React + wagmi/viem frontend + Convex backend (DB + auth), fully wired | ✅ DB + auth |
-| **`nft-mint`** | ERC-721 + a mint UI; extends base | optional (metadata, allowlist) |
-| **`erc20-launchpad`** | ERC-20 + a token-launchpad UI; extends base | optional |
-| **`onchain-mini-app`** | Small contract (tipping / counter) + UI, with **leaderboard / profiles / scores in Convex** — the showcase for offchain state alongside onchain | ✅ showcases offchain state |
+| **`fullstack-monad-convex`** (the only one) | Bare full-stack starter: a Foundry contract + Vite/React + wagmi/viem frontend (shadcn/ui, dark theme) + Convex backend (DB + auth), all wired for Monad. No demo features — just the canvas. | ✅ wired |
 
-The base is the superset. `nft-mint` / `erc20-launchpad` swap the contract + UI and may drop Convex if a
-variant is purely onchain. `onchain-mini-app` is the one that proves the on/offchain split.
+It must stay **bare** in the sense that matters: no feature components, no demo screens — just the canvas.
+"Bare" does **not** mean stripped-down libraries: the **full shadcn/ui component set is vendored** (so the
+agent can use any component without installing), plus Monad wiring + Convex wiring, ready to deploy. The
+agent fills in the actual app.
 
-## Shared skeleton (`fullstack-monad-convex`)
+> Possible future addition (not now): a single `onchain-mini-app` general starter, *if* it proves to open
+> many directions. Resist adding anything more specific than that. Fewer templates, more general.
+
+## Structure (as built)
+
+Files are **kebab-case**. The frontend is a bare shadcn/ui + Vite app; Convex is co-located in the
+frontend package (the standard, reliable Vite + Convex layout). Tailwind v4 + Biome are pre-configured.
 
 ```
 my-app/
   contracts/                  # Foundry
-    Counter.sol               # or Token.sol / MyNFT.sol per variant
+    src/Counter.sol           # one minimal example contract (generic, not app-specific)
+    test/Counter.t.sol        # forge test runs pre-deploy
     foundry.toml
     remappings.txt
-  test/
-    Counter.t.sol             # forge test runs pre-deploy (the safety incumbents lack)
-  convex/                     # Convex backend (TypeScript)
-    schema.ts                 # defineSchema/defineTable — offchain tables
-    auth.config.ts            # Convex Auth config
-    *.ts                      # queries / mutations / actions
   frontend/
     src/
-      contracts/              # @generated codegen target (addresses.ts, abis.ts, hooks.ts)
-      main.tsx
-      App.tsx                 # uses generated wagmi hooks + Convex React client
-      wagmi-config.ts         # wagmi v2 config with Monad chains
-      convex-client.ts        # ConvexReactProvider wiring
-    package.json              # vite, react, wagmi, viem, convex
-    vite.config.ts
-    index.html
-  monad.config.json           # networks, contracts, frontendDir (see monad-mode.md)
-  convex.json                 # Convex project config (deployment target)
-  package.json                # bun workspaces root (contracts + frontend + convex)
+      components/
+        ui/                   # full shadcn/ui set (~50 components), vendored — excluded from Biome
+        header.tsx            # wallet connect
+      hooks/                  # shadcn hooks (use-mobile)
+      pages/                  # index.tsx (starter shell) + not-found.tsx
+      lib/                    # wagmi-config.ts (Monad chains), convex-client.ts, utils.ts (cn)
+      contracts/              # @generated codegen target (addresses.ts, abis.ts) — written on deploy
+      app.tsx                 # routes
+      main.tsx                # providers: wagmi + react-query + convex + router
+      index.css               # Tailwind v4 + theme tokens (dark)
+    convex/                   # Convex backend
+      schema.ts               # offchain tables (one example table — replace)
+      auth.config.ts          # Convex Auth (deepened in Phase 7)
+      _generated/api.ts       # anyApi stub so the app builds before provisioning (codegen overwrites)
+    components.json           # shadcn config
+    biome.json                # lint + format
+    package.json              # vite, react, wagmi, viem, convex, shadcn deps
+  monad.config.json           # networks, contracts, frontendDir
+  package.json                # bun workspaces root
   AGENTS.md                   # AI instructions (below)
   README.md
 ```
 
-The onchain piece stays minimal; user accounts, sessions, leaderboards, profiles, and scores live in
-Convex. See [convex-backend.md](./convex-backend.md) for the on/offchain split and the in-app DB panel.
+The starter ships **no feature UI** — just the wiring and a minimal shell. The onchain piece stays minimal;
+accounts, profiles, leaderboards, sessions live in Convex. See [convex-backend.md](./convex-backend.md) for
+the on/offchain split and the in-app DB panel.
 
 ## AGENTS.md (template-level AI instructions)
 

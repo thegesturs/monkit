@@ -8,8 +8,8 @@ See [features/templates.md](../features/templates.md).
 
 ## Scope
 
-- A `templates/` directory shipped with the app: `fullstack-monad-convex` (base) + `nft-mint`,
-  `erc20-launchpad`, `onchain-mini-app`.
+- A `templates/` directory shipped with the app: **one** bare general-purpose starter,
+  `fullstack-monad-convex`. No app-specific variants.
 - `workspace.scaffoldTemplate` RPC: copy template → register project → install deps → spawn local devnet →
   write `monad.config.json` → (optional) auto-deploy starter contract + open frontend in the in-app browser.
 - Bootstrap UI entry: "Start from a template" (new project flow + menu item).
@@ -38,23 +38,16 @@ See [features/templates.md](../features/templates.md).
 
 ## Implementation steps
 
-1. **Author the base template `templates/fullstack-monad-convex/`.**
-   - Skeleton per [features/templates.md](../features/templates.md): `contracts/` (Foundry, `Counter.sol`
-     + `Counter.t.sol`, `foundry.toml`, `remappings.txt`), `frontend/` (Vite + React + wagmi v2 + viem,
-     `src/contracts/` codegen target, `wagmi-config.ts`, `convex-client.ts`), `convex/` (`schema.ts`,
-     `auth.config.ts`, an example query + mutation), `monad.config.json`, `convex.json`, `package.json`
-     (bun workspaces), `AGENTS.md`, `README.md`.
-   - Frontend renders without a live Convex backend: gate Convex-backed widgets behind a "backend starting…"
-     state so Phase 0 demos a running app.
+1. **Author the bare template `templates/fullstack-monad-convex/`.** ✅ *Done.*
+   - Structure per [features/templates.md](../features/templates.md): `contracts/` (Foundry, `Counter.sol`
+     + test), `frontend/` (Vite + React 19 + wagmi v2 + viem, shadcn/ui + Tailwind v4 dark theme, Biome,
+     react-router, `src/contracts/` codegen target, `lib/` wiring), `frontend/convex/` (`schema.ts`,
+     `auth.config.ts`, `_generated/api.ts` anyApi stub), `monad.config.json`, `package.json`, `AGENTS.md`.
+   - **Bare starter, no feature UI** — just a minimal shell. Builds and runs without a live Convex backend.
+   - Verified: `forge test` 3/3, `tsc` + `vite build` pass, `biome check` clean.
 
-2. **Author the three variants.** Each is the base with the contract + UI swapped:
-   - `nft-mint`: `MyNFT.sol` (ERC-721) + a mint page.
-   - `erc20-launchpad`: `Token.sol` (ERC-20) + a launchpad page.
-   - `onchain-mini-app`: a tipping/counter contract + a leaderboard UI whose data layer targets Convex
-     (the showcase for Phase 7).
-
-3. **Wire types.** `TemplateId = "fullstack-monad-convex" | "nft-mint" | "erc20-launchpad" | "onchain-mini-app"`;
-   `ScaffoldTemplateRequest { template: TemplateId, name: string, parentDir?: string }`.
+2. **Wire types.** `TemplateId = "fullstack-monad-convex"` (a single-member union for now — additive if a
+   second general starter is ever justified); `ScaffoldTemplateRequest { template: TemplateId, name: string, parentDir?: string }`.
 
 4. **`workspace.scaffoldTemplate` service.**
    - Resolve destination `parentDir/name` (default to the app's projects dir; error if exists).
@@ -66,7 +59,8 @@ See [features/templates.md](../features/templates.md).
    - Return `{ projectId, path }` plus a progress stream id so the renderer can show setup state.
 
 5. **Server handler + renderer action.** Add `ScaffoldTemplate` handler; add `scaffoldFromTemplate` to the
-   workspace store; surface a template picker (grid of the four, with one-line descriptions).
+   workspace store; surface the template (a single starter for now; the picker is ready for more if ever
+   justified).
 
 6. **Optional auto-start (behind a default-on checkbox).** After install completes: compile + deploy the
    starter contract to local (reuse Phase-3 deploy), then start the frontend dev server (reuse Phase-4
@@ -84,9 +78,7 @@ See [features/templates.md](../features/templates.md).
 3. `frontend/src/contracts/` is populated by codegen on the auto-deploy (Phase-4 path).
 4. `AGENTS.md` is present at the project root; opening an agent session, the agent correctly describes the
    project as a Monad dApp with Convex offchain and uses `monad_deploy` when asked to deploy.
-5. Each of the other three templates scaffolds and its frontend renders (Convex widgets show "backend
-   starting…" — full data flow validated in Phase 7).
-6. Scaffolding into an existing directory name errors cleanly.
+5. Scaffolding into an existing directory name errors cleanly.
 
 ## PR scope
 

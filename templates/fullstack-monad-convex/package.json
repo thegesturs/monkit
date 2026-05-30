@@ -1,0 +1,12 @@
+{
+  "name": "fullstack-monad-convex",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Full-stack Monad dApp starter — Foundry contract + Vite/React frontend + Convex backend.",
+  "workspaces": ["frontend"],
+  "scripts": {
+    "dev": "bun --cwd frontend run dev",
+    "build": "bun --cwd frontend run build",
+    "test": "cd contracts && forge test"
+  }
+}
