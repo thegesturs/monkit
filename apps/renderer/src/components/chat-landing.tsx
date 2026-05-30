@@ -1,11 +1,31 @@
-import { Check, ChevronDown, FolderClosed, FolderPlus, Send, X } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  FolderClosed,
+  FolderOpen,
+  FolderPlus,
+  Rocket,
+  Send,
+  X,
+} from "lucide-react";
+import { Effect } from "effect";
 import { useMemo, useRef, useState } from "react";
 
 import type { FolderId } from "@memoize/wire";
 
 import { cn } from "~/lib/utils";
+import { getRpcClient } from "~/lib/rpc-client";
 import { Button } from "~/components/ui/button";
 import { Card, CardPanel } from "~/components/ui/card";
+import {
+  Dialog,
+  DialogClose,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogPopup,
+  DialogTitle,
+} from "~/components/ui/dialog";
 import { Frame, FrameFooter } from "~/components/ui/frame";
 import {
   Menu,
@@ -47,7 +67,17 @@ const MAX_HEIGHT = 240;
  * swap this surface for `<ChatView />` + `<ChatComposer />` on the next
  * render.
  */
+/**
+ * Cold-start surface. With no project selected the user lands on the empty
+ * launch screen (start a new dApp or open an existing project). Once a project
+ * is selected, the per-project landing ("What should we build in X?") shows.
+ */
 export function ChatLanding() {
+  const selectedFolderId = useWorkspaceStore((s) => s.selectedFolderId);
+  return selectedFolderId === null ? <LaunchScreen /> : <ProjectLanding />;
+}
+
+function ProjectLanding() {
   const folders = useWorkspaceStore((s) => s.folders);
   const selectedFolderId = useWorkspaceStore((s) => s.selectedFolderId);
   const selectFolder = useWorkspaceStore((s) => s.select);
@@ -241,6 +271,218 @@ export function ChatLanding() {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Suggest a kebab-case project name from the user's prompt. */
+function suggestName(prompt: string): string {
+  const slug = prompt
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .split("-")
+    .filter(Boolean)
+    .slice(0, 4)
+    .join("-");
+  return slug.length > 0 ? slug : "my-monad-app";
+}
+
+/**
+ * Empty/cold-start launch surface. Type what to build, hit Launch → a quick
+ * dialog asks name + location → we scaffold the full-stack starter, select it,
+ * and start the agent on the prompt in plan mode. Also offers opening an
+ * existing project.
+ */
+function LaunchScreen() {
+  const folders = useWorkspaceStore((s) => s.folders);
+  const selectFolder = useWorkspaceStore((s) => s.select);
+  const addFolder = useWorkspaceStore((s) => s.add);
+  const scaffoldFromTemplate = useWorkspaceStore((s) => s.scaffoldFromTemplate);
+
+  const create = useChatsStore((s) => s.create);
+  const defaultProviderId = useSettingsStore((s) => s.defaultProviderId);
+  const defaultModelByProvider = useSettingsStore(
+    (s) => s.defaultModelByProvider,
+  );
+  const defaultRuntimeMode = useSettingsStore((s) => s.defaultRuntimeMode);
+
+  const [prompt, setPrompt] = useState("");
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [parentDir, setParentDir] = useState<string | null>(null);
+  const [launching, setLaunching] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const promptReady = prompt.trim().length > 0;
+
+  const openDialog = () => {
+    if (!promptReady) return;
+    setName(suggestName(prompt));
+    setError(null);
+    setDialogOpen(true);
+  };
+
+  const chooseLocation = async (): Promise<void> => {
+    try {
+      const client = await getRpcClient();
+      const dir = await Effect.runPromise(client.workspace.pickFolder({}));
+      if (dir !== null) setParentDir(dir);
+    } catch {
+      // picker dismissed / unavailable — leave the current choice
+    }
+  };
+
+  const launch = async (): Promise<void> => {
+    const trimmedName = name.trim();
+    if (trimmedName.length === 0 || parentDir === null || launching) return;
+    setLaunching(true);
+    setError(null);
+
+    const folder = await scaffoldFromTemplate(trimmedName, parentDir);
+    if (folder === null) {
+      setError(
+        useWorkspaceStore.getState().error ?? "Couldn't create the project.",
+      );
+      setLaunching(false);
+      return;
+    }
+
+    const model = defaultModelByProvider[defaultProviderId];
+    const result = await create(folder.id, defaultProviderId, model, {
+      initialPrompt: prompt.trim(),
+      runtimeMode: defaultRuntimeMode,
+      permissionMode: "plan",
+    });
+    if (result === null) {
+      setError(
+        useChatsStore.getState().error ??
+          `Project created, but couldn't start ${defaultProviderId}. Check its CLI is installed and signed in.`,
+      );
+      setLaunching(false);
+      return;
+    }
+    // Success — MainShell swaps to ChatView (a session is now selected); this
+    // surface unmounts, so we leave `launching` set.
+    setDialogOpen(false);
+  };
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 py-10">
+      <div className="flex w-full max-w-xl flex-col items-center gap-6">
+        <div className="flex flex-col items-center gap-2 text-center">
+          <h1 className="text-3xl font-semibold tracking-tight text-foreground">
+            Launch a Monad dApp
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Describe what you want to build. We'll scaffold a full-stack starter
+            and the agent plans it with you.
+          </p>
+        </div>
+
+        <Frame>
+          <Card className="rounded-xl border-border/50">
+            <CardPanel className="relative flex flex-col gap-2 px-3 py-2">
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    openDialog();
+                  }
+                }}
+                placeholder="e.g. an NFT mint with a gallery and a holders leaderboard"
+                style={{ minHeight: MIN_HEIGHT, maxHeight: MAX_HEIGHT }}
+                className="w-full resize-none bg-transparent text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground"
+              />
+              <div className="flex items-center justify-between">
+                <span className="inline-flex items-center rounded-md bg-primary/15 px-2 py-1 text-[11px] font-medium text-primary">
+                  Full Stack dApp
+                </span>
+                <Button onClick={openDialog} disabled={!promptReady} size="sm">
+                  <Rocket className="size-3.5" />
+                  Launch
+                </Button>
+              </div>
+            </CardPanel>
+          </Card>
+        </Frame>
+
+        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+          <span>or open an existing project</span>
+          <ProjectPicker
+            folders={folders}
+            selectedFolderId={null}
+            selectedName={null}
+            onPick={(id) => void selectFolder(id)}
+            onAdd={() => void addFolder()}
+          />
+        </div>
+      </div>
+
+      <Dialog
+        open={dialogOpen}
+        onOpenChange={(open) => {
+          if (!launching) setDialogOpen(open);
+        }}
+      >
+        <DialogPopup className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Name your dApp</DialogTitle>
+            <DialogDescription>
+              We'll create a full-stack Monad starter, then the agent starts
+              planning.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-4 px-6 pb-2">
+            <label className="flex flex-col gap-1.5">
+              <span className="text-xs text-muted-foreground">App name</span>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="my-monad-app"
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              />
+            </label>
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs text-muted-foreground">Location</span>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void chooseLocation()}
+                >
+                  <FolderOpen className="size-3.5" />
+                  Choose folder
+                </Button>
+                <span
+                  className="min-w-0 flex-1 truncate text-xs text-muted-foreground"
+                  title={parentDir ?? undefined}
+                >
+                  {parentDir ?? "No folder chosen"}
+                </span>
+              </div>
+            </div>
+            {error !== null && (
+              <p className="rounded-md border border-rose-400/30 bg-rose-500/[0.08] px-3 py-2 text-[12px] text-rose-200">
+                {error}
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <DialogClose render={<Button variant="ghost" disabled={launching} />}>
+              Cancel
+            </DialogClose>
+            <Button
+              onClick={() => void launch()}
+              disabled={launching || name.trim().length === 0 || parentDir === null}
+            >
+              {launching ? "Creating…" : "Create & start"}
+            </Button>
+          </DialogFooter>
+        </DialogPopup>
+      </Dialog>
     </div>
   );
 }
