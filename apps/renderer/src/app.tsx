@@ -157,6 +157,9 @@ function MainShell() {
   const selectedFolder = selectedFolderId
     ? (folders.find((f) => f.id === selectedFolderId) ?? null)
     : null;
+  // No project selected → the empty launch surface. Hide the main top bar and
+  // the right pane so the launch screen owns the whole main area.
+  const noProject = selectedFolderId === null;
   // Chat-creation in flight for the selected project — drives the
   // step-progress overlay so both the sidebar "+" button and the
   // ChatLanding submit get the same multi-second feedback panel instead
@@ -268,9 +271,11 @@ function MainShell() {
     const panel = rightPanelRef.current;
     if (panel === null) return;
     const collapsed = panel.isCollapsed();
-    if (rightSidebarOpen && collapsed) panel.expand();
-    if (!rightSidebarOpen && !collapsed) panel.collapse();
-  }, [rightPanelRef, rightSidebarOpen]);
+    // Force the right pane closed while no project is selected.
+    const shouldOpen = !noProject && rightSidebarOpen;
+    if (shouldOpen && collapsed) panel.expand();
+    if (!shouldOpen && !collapsed) panel.collapse();
+  }, [rightPanelRef, rightSidebarOpen, noProject]);
 
   return (
     <div className="dark flex h-dvh max-h-dvh min-h-0 w-screen overflow-hidden text-foreground">
@@ -304,13 +309,17 @@ function MainShell() {
         <Separator className="w-px bg-border transition-colors hover:bg-foreground/20 active:bg-foreground/30" />
         <Panel id="main" minSize="30%">
           <main className="flex h-full min-h-0 min-w-0 flex-col bg-background/70 backdrop-blur-3xl">
-            <TopBarMain />
-            <UpdateBanner />
-            <IndexProgressBanner />
-            <MainTabs
-              projectId={selectedFolderId}
-              emptyLabel={emptyTabLabel}
-            />
+            {!noProject && (
+              <>
+                <TopBarMain />
+                <UpdateBanner />
+                <IndexProgressBanner />
+                <MainTabs
+                  projectId={selectedFolderId}
+                  emptyLabel={emptyTabLabel}
+                />
+              </>
+            )}
             <div
               hidden={activeMainTab !== "chat"}
               className="flex min-h-0 flex-1 flex-col"
@@ -362,7 +371,9 @@ function MainShell() {
             )}
           </main>
         </Panel>
-        <Separator className="w-px bg-border transition-colors hover:bg-foreground/20 active:bg-foreground/30" />
+        {!noProject && (
+          <Separator className="w-px bg-border transition-colors hover:bg-foreground/20 active:bg-foreground/30" />
+        )}
         <Panel
           id="files"
           defaultSize="22%"
