@@ -1,7 +1,11 @@
 import { FileSystem } from "@effect/platform";
 import { SqlClient } from "@effect/sql";
 import { Effect, Layer } from "effect";
+import * as fsp from "node:fs/promises";
+import * as fsSync from "node:fs";
+import * as os from "node:os";
 import * as Path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   Folder,
@@ -9,6 +13,7 @@ import {
   WorkspaceDuplicatePathError,
   WorkspaceInvalidPathError,
   WorkspaceNotFoundError,
+  WorkspaceScaffoldError,
 } from "@memoize/wire";
 
 import { IndexRegistry } from "../../code-index/services/index-registry.ts";
@@ -30,6 +35,52 @@ const rowToFolder = (row: ProjectRow): Folder =>
   });
 
 const SELECTED_KEY = "selectedProjectId";
+
+// Directory/file names never copied when scaffolding a template — build
+// artifacts and VCS metadata that a clean checkout wouldn't carry but a
+// dev machine that ran the template will.
+const SCAFFOLD_SKIP = new Set([
+  "node_modules",
+  ".git",
+  "dist",
+  "out",
+  "cache",
+  "broadcast",
+  ".DS_Store",
+]);
+
+/**
+ * Locate the bundled `templates/` directory. Checks an env override, then a
+ * few cwd-relative candidates, then walks up from this module's location —
+ * covering `bun` dev runs and transpiled layouts. Returns null if not found
+ * (e.g. a packaged build that didn't bundle templates — a packaging follow-up).
+ */
+const resolveTemplatesDir = (template: string): string | null => {
+  const candidates: string[] = [];
+  if (process.env.MEMOIZE_TEMPLATES_DIR) {
+    candidates.push(process.env.MEMOIZE_TEMPLATES_DIR);
+  }
+  const cwd = process.cwd();
+  for (let up = 0; up <= 3; up++) {
+    candidates.push(Path.join(cwd, ...Array(up).fill(".."), "templates"));
+  }
+  try {
+    const here = Path.dirname(fileURLToPath(import.meta.url));
+    for (let up = 1; up <= 7; up++) {
+      candidates.push(Path.join(here, ...Array(up).fill(".."), "templates"));
+    }
+  } catch {
+    // import.meta.url unavailable in this runtime — cwd candidates cover dev.
+  }
+  for (const root of candidates) {
+    try {
+      if (fsSync.existsSync(Path.join(root, template))) return root;
+    } catch {
+      // unreadable candidate — try the next one
+    }
+  }
+  return null;
+};
 
 export const WorkspaceServiceLive = Layer.effect(
   WorkspaceService,
@@ -74,28 +125,12 @@ export const WorkspaceServiceLive = Layer.effect(
         return rows.length > 0 ? rowToFolder(rows[0]!) : null;
       });
 
-    const add: WorkspaceService["Type"]["add"] = (rawPath) =>
+    // Dup-check + insert a resolved directory as a project, kick its index,
+    // and return the Folder. Shared by `add` and `scaffoldTemplate`.
+    const insertProject = (
+      resolved: string,
+    ): Effect.Effect<Folder, WorkspaceDuplicatePathError> =>
       Effect.gen(function* () {
-        const resolved = Path.resolve(rawPath);
-
-        const stat = yield* fs.stat(resolved).pipe(
-          Effect.mapError(
-            () =>
-              new WorkspaceInvalidPathError({
-                path: resolved,
-                reason: "path does not exist",
-              }),
-          ),
-        );
-        if (stat.type !== "Directory") {
-          return yield* Effect.fail(
-            new WorkspaceInvalidPathError({
-              path: resolved,
-              reason: "path is not a directory",
-            }),
-          );
-        }
-
         const dupes = yield* sql<{ id: string }>`
           SELECT id FROM projects WHERE path = ${resolved} LIMIT 1
         `.pipe(Effect.orDie);
@@ -118,6 +153,94 @@ export const WorkspaceServiceLive = Layer.effect(
         yield* triggerIndex(resolved);
 
         return Folder.make({ id, path: resolved, name, addedAt: now });
+      });
+
+    const add: WorkspaceService["Type"]["add"] = (rawPath) =>
+      Effect.gen(function* () {
+        const resolved = Path.resolve(rawPath);
+
+        const stat = yield* fs.stat(resolved).pipe(
+          Effect.mapError(
+            () =>
+              new WorkspaceInvalidPathError({
+                path: resolved,
+                reason: "path does not exist",
+              }),
+          ),
+        );
+        if (stat.type !== "Directory") {
+          return yield* Effect.fail(
+            new WorkspaceInvalidPathError({
+              path: resolved,
+              reason: "path is not a directory",
+            }),
+          );
+        }
+
+        return yield* insertProject(resolved);
+      });
+
+    const scaffoldTemplate: WorkspaceService["Type"]["scaffoldTemplate"] = ({
+      template,
+      name,
+      parentDir,
+    }) =>
+      Effect.gen(function* () {
+        const safeName = name.trim();
+        if (safeName.length === 0) {
+          return yield* Effect.fail(
+            new WorkspaceScaffoldError({ reason: "project name is empty" }),
+          );
+        }
+
+        const templatesRoot = resolveTemplatesDir(template);
+        if (templatesRoot === null) {
+          return yield* Effect.fail(
+            new WorkspaceScaffoldError({
+              reason: "could not locate the templates directory",
+            }),
+          );
+        }
+        const src = Path.join(templatesRoot, template);
+
+        const parent = parentDir
+          ? Path.resolve(parentDir)
+          : Path.join(os.homedir(), "MonadApps");
+        const dest = Path.join(parent, safeName);
+
+        const exists = yield* fs.exists(dest).pipe(Effect.orDie);
+        if (exists) {
+          return yield* Effect.fail(
+            new WorkspaceInvalidPathError({
+              path: dest,
+              reason: "a folder with that name already exists here",
+            }),
+          );
+        }
+
+        yield* fs
+          .makeDirectory(parent, { recursive: true })
+          .pipe(Effect.ignore);
+
+        yield* Effect.tryPromise({
+          try: () =>
+            fsp.cp(src, dest, {
+              recursive: true,
+              filter: (source) => {
+                if (SCAFFOLD_SKIP.has(Path.basename(source))) return false;
+                // Foundry deps (forge-std) reinstall on first build; basename
+                // "lib" would collide with frontend/src/lib, so match the path.
+                if (source.endsWith(Path.join("contracts", "lib"))) return false;
+                return true;
+              },
+            }),
+          catch: (cause) =>
+            new WorkspaceScaffoldError({
+              reason: `failed to copy template: ${String(cause)}`,
+            }),
+        });
+
+        return yield* insertProject(dest);
       });
 
     const remove: WorkspaceService["Type"]["remove"] = (folderId) =>
@@ -189,6 +312,7 @@ export const WorkspaceServiceLive = Layer.effect(
 
     return {
       add,
+      scaffoldTemplate,
       list,
       remove,
       getSelected,

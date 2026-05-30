@@ -9,6 +9,14 @@ const Add = MemoizeRpcs.toLayerHandler("workspace.add", ({ path }) =>
   Effect.flatMap(WorkspaceService, (ws) => ws.add(path)),
 );
 
+const ScaffoldTemplate = MemoizeRpcs.toLayerHandler(
+  "workspace.scaffoldTemplate",
+  ({ template, name, parentDir }) =>
+    Effect.flatMap(WorkspaceService, (ws) =>
+      ws.scaffoldTemplate({ template, name, parentDir }),
+    ),
+);
+
 const List = MemoizeRpcs.toLayerHandler("workspace.list", () =>
   Effect.flatMap(WorkspaceService, (ws) => ws.list()),
 );
@@ -46,6 +54,7 @@ const SearchFiles = MemoizeRpcs.toLayerHandler(
 
 export const WorkspaceHandlersLayer = Layer.mergeAll(
   Add,
+  ScaffoldTemplate,
   List,
   Remove,
   PickFolder,

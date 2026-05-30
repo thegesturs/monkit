@@ -157,6 +157,9 @@ function MainShell() {
   const selectedFolder = selectedFolderId
     ? (folders.find((f) => f.id === selectedFolderId) ?? null)
     : null;
+  // No project selected → the empty launch surface. Hide the main top bar and
+  // the right pane so the launch screen owns the whole main area.
+  const noProject = selectedFolderId === null;
   // Chat-creation in flight for the selected project — drives the
   // step-progress overlay so both the sidebar "+" button and the
   // ChatLanding submit get the same multi-second feedback panel instead
@@ -271,6 +274,48 @@ function MainShell() {
     if (rightSidebarOpen && collapsed) panel.expand();
     if (!rightSidebarOpen && !collapsed) panel.collapse();
   }, [rightPanelRef, rightSidebarOpen]);
+
+  // Empty state: no project selected. Render a minimal two-pane shell — the
+  // sidebar plus a full-width main that hosts the launch screen. No top bar,
+  // no right pane, so the launch surface owns the whole main area.
+  if (noProject) {
+    return (
+      <div className="dark flex h-dvh max-h-dvh min-h-0 w-screen overflow-hidden text-foreground">
+        <Group
+          id="memoize.shell.empty.v1"
+          orientation="horizontal"
+          className="flex-1"
+        >
+          <Panel
+            id="projects"
+            defaultSize="18%"
+            minSize="180px"
+            maxSize="40%"
+            collapsible
+            collapsedSize="0%"
+            panelRef={leftPanelRef}
+            onResize={(size) => {
+              const open = size.asPercentage > 0;
+              if (open !== leftSidebarOpen) setLeftSidebarOpen(open);
+            }}
+          >
+            <div className="flex h-full min-h-0 flex-col bg-background/20">
+              <TopBarLeft />
+              <div className="flex min-h-0 flex-1 flex-col">
+                <ProjectsSidebar />
+              </div>
+            </div>
+          </Panel>
+          <Separator className="w-px bg-border transition-colors hover:bg-foreground/20 active:bg-foreground/30" />
+          <Panel id="main" minSize="30%">
+            <main className="flex h-full min-h-0 min-w-0 flex-col bg-background/70 backdrop-blur-3xl">
+              <ChatLanding />
+            </main>
+          </Panel>
+        </Group>
+      </div>
+    );
+  }
 
   return (
     <div className="dark flex h-dvh max-h-dvh min-h-0 w-screen overflow-hidden text-foreground">
