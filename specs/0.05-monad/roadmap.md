@@ -1,15 +1,35 @@
 # Roadmap
 
-Six phases, each ships independently as one PR, each ends with an end-to-end demo.
+Each phase ships independently as one PR and ends with an end-to-end demo.
+
+**Current direction:** vibe-coder, full-stack, Convex-backed, templates-first. Phases 1–3 are built (RPC,
+wallet, deploy interface). **Phase 0 (templates) is the new starting point** for the work ahead, followed by
+the full-stack/Convex and Simple-mode phases.
 
 | Phase | Title | Demo |
 |---|---|---|
-| 1 | Foundations | Toggle Monad mode → see "connected to testnet, block N" |
-| 2 | Wallet + network | Burner generated, switch networks, faucet on testnet works |
-| 3 | Local devnet + compile + deploy | Click Deploy → contract address in <5s on local |
+| 0 | **Templates first** | Scaffold a full-stack starter (contract + frontend + Convex) → it installs, deploys, and runs in the in-app browser |
+| 1 | Foundations *(built)* | "Connected to testnet, block N" |
+| 2 | Wallet + network *(built)* | Burner generated, switch networks, faucet on testnet works |
+| 3 | Local devnet + compile + deploy *(interface built)* | Click Deploy → contract address in <5s on local |
 | 4 | Frontend auto-wire | Deploy a Counter → frontend hot-reloads with new address |
 | 5 | AI Monad tools + slash commands | Prompt: "deploy an ERC20" → agent does it end-to-end |
-| 6 | Explorer + frontend publish | Build → IPFS → share QR → phone uses dApp |
+| 6 | Explorer + frontend publish | Build → shareable URL → QR → phone uses dApp |
+| 7 | Convex backend (DB + auth) | Prompt "add a leaderboard" → Convex table fills, visible in the DB panel |
+| 8 | Simple mode (vibe-coder UX) | First-run user ships a full-stack dApp without seeing a key, ABI, diff, or CLI |
+| 9 | Project Plan panel | Agent plans a multi-step build → pinned checklist shows which step is live, "N of M Done" |
+
+## Phase 0 — Templates first
+**Goal:** A working full-stack starter exists and can be scaffolded in seconds. This is the foundation the
+agent builds on and the first new slice to ship. See [features/templates.md](./features/templates.md).
+
+- New `templates/` dir with `fullstack-monad-convex` (base), `nft-mint`, `erc20-launchpad`, `onchain-mini-app`.
+- Base skeleton: Foundry `contracts/` + Vite/React `frontend/` (wagmi v2 + viem) + `convex/` (schema + Convex Auth) + `AGENTS.md` + `monad.config.json`.
+- New `workspace.scaffoldTemplate` RPC + handler + service (copy template → register project → install deps → spawn local devnet + local Convex backend). Reuses the existing folder-add path.
+- Local Convex backend runs with no login wall (see [features/convex-backend.md](./features/convex-backend.md)).
+
+**Done when:** pick a template → name it → it installs, the starter contract deploys to local, and the
+frontend opens running in the in-app browser — no CLI.
 
 ## Phase 1 — Foundations
 **Goal:** Plumbing exists. Renderer can see the Monad mode tab group. RPC roundtrips work.
@@ -75,13 +95,50 @@ Six phases, each ships independently as one PR, each ends with an end-to-end dem
 - `monad_publish` MCP tool — agent can publish too.
 - Template polish: starter templates ship working Counter / ERC20 / NFT examples + pre-wired wagmi v2 frontend.
 
-**Done when:** end-to-end demo — `monad new my-app` from template → AI vibe-codes a feature → deploy → publish → open IPFS URL on phone → connect mobile wallet → interact.
+**Done when:** end-to-end demo — `monad new my-app` from template → AI vibe-codes a feature → deploy → publish → open shareable URL on phone → connect mobile wallet → interact.
+
+## Phase 7 — Convex backend (DB + auth)
+**Goal:** Full-stack means a real backend. Offchain state lives in Convex, visible in-app, with auth working
+out of the box. See [features/convex-backend.md](./features/convex-backend.md).
+
+- Local Convex backend lifecycle (spawn/stop alongside the devnet); resolve local self-hosted vs cloud-dev provisioning first.
+- In-app **Convex** right-pane panel (new `RightTab`) showing tables/rows/activity for the active project.
+- Convex Auth wired in the template so "add login" is a prompt, not config.
+- Agent applies the onchain/offchain split from `AGENTS.md` automatically.
+
+**Done when:** prompt "add a leaderboard ranking players by score" → agent edits `convex/` + frontend → the
+table fills as the user interacts → data is visible in the Convex panel, no backend setup by the user.
+
+## Phase 8 — Simple mode (vibe-coder UX)
+**Goal:** A first-time, non-developer user ships a full-stack dApp without seeing developer machinery. See
+[features/simple-mode.md](./features/simple-mode.md).
+
+- `simpleMode` setting (default on); hide PR + Changes tabs in `right-pane.tsx`.
+- Plain-language labels, friendly errors, "what just happened" receipts.
+- In-app browser auto-opens the running dApp after scaffold/deploy.
+- Invisible toolchain onboarding ("Set me up" one-click install).
+
+**Done when:** fresh user → one prompt → a running, shareable full-stack dApp, having never seen a key, ABI,
+git diff, or terminal.
+
+## Phase 9 — Project Plan panel
+**Goal:** The agent follows a plan cleanly and the user always sees which step is happening now. See
+[features/project-plan.md](./features/project-plan.md).
+
+- Pinned Project Plan panel driven by the agent's existing `TodoWrite` stream (no new event type).
+- Per-step status (done / in-progress / pending), current-step highlight, "N of M Done" counter, collapse.
+- `AGENTS.md` + system preset teach the agent to plan first and update one step at a time.
+- Simple mode suppresses the inline TodoWrite row so the panel is the single source of truth.
+
+**Done when:** a multi-step prompt produces a visible ordered plan; exactly one step shows in-progress at a
+time; completed steps check off and the counter advances.
 
 ## After 0.05
 
-Possible Phase 7+ follow-ups (out of scope for this MVP):
-- Hardware wallet support (Ledger / Trezor)
-- Contract verification on the public Monad explorer
-- Forge test runner UI surface (currently usable via PTY terminal only)
-- Multi-sig / Safe flows
-- Cloud-shared dApp gallery
+Possible follow-ups (out of scope for this MVP):
+- **OpenClaw-style autonomous on-chain agents** (on-chain identity + auto wallet + Telegram bot + hosting) — explicitly deferred; secondary to the full-stack dApp loop.
+- Partner-protocol building blocks (DEX / NFT mint / staking templates + MCP blueprints).
+- Composer mode tabs beyond Full Stack Dapp (Program, Mobile, Games).
+- Hardware wallet support (Ledger / Trezor); contract verification on the public Monad explorer.
+- Forge test runner UI surface (currently usable via PTY terminal only).
+- Multi-sig / Safe flows; cloud-shared dApp gallery.

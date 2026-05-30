@@ -2,7 +2,12 @@
 
 ## The one-paragraph pitch
 
-Memoize Alpha for Monad is a desktop app where you describe what you want to build, the AI writes the Solidity and the frontend, and one click deploys it to a real Monad chain — with a wallet, a faucet, a tx explorer, and a shareable IPFS URL all in the same window. No browser tabs. No `npx hardhat init`. No copying ABIs by hand. No Etherscan trips.
+Memoize Alpha for Monad is a desktop app where you describe a **full-stack dApp**, the AI writes the
+Solidity, the React frontend, **and the offchain backend (Convex: database + auth)**, and the app deploys it
+to a real Monad chain and runs it for you — wallet, faucet, tx explorer, database panel, and a shareable URL
+all in the same window. You start from a working template, not an empty folder. No browser tabs. No
+`npx hardhat init`. No copying ABIs by hand. No setting up a database. No git. If you've never touched
+Monad, **Simple mode** hides all of it and shows you your app running.
 
 ## What "good" looks like — three scenes
 
@@ -27,6 +32,17 @@ Memoize Alpha for Monad is a desktop app where you describe what you want to bui
 6. Claude reports: "Done. Token deployed at 0xabc…, 1000 WAGMI minted to your burner."
 
 **Zero clicks from the user after the initial prompt.**
+
+### Scene 2b: A full-stack feature with a database
+
+1. User: "Add a leaderboard that ranks players by how many times they've called `increment()`."
+2. Claude decides the split automatically: the count stays onchain, the leaderboard + player profiles go in
+   **Convex** (it edits `convex/schema.ts` and adds a `leaderboard.list` query + `scores.submit` mutation).
+3. Claude wires the frontend to the Convex React client and the generated wagmi hooks together.
+4. The local Convex backend is already running (auto-provisioned, no login). The user opens the **Convex**
+   panel and sees the `scores` table fill up as they click increment in the in-app browser.
+
+**A working full-stack feature — contract + UI + database — from one sentence, no backend setup.**
 
 ### Scene 3: Going to testnet
 
@@ -58,7 +74,25 @@ On every deploy, TS bindings auto-write. No "now go update your frontend with th
 The starter templates are the AI's reference. The agent reads them, mimics them, and the user gets opinionated structure for free. Customization happens after the user can build something that works.
 
 ### 6. Nothing leaves the machine by default
-Burner keys: keychain. RPC: configurable, but local by default. Code: local. The only network calls are user-initiated: RPC to public Monad nodes, IPFS publish, optional WalletConnect.
+Burner keys: keychain. RPC: configurable, but local by default. Code: local. **Offchain data: a local Convex
+backend by default** (no cloud, no login wall — mirrors the local devnet). The only network calls are
+user-initiated: RPC to public Monad nodes, IPFS publish, optional WalletConnect, optional cloud Convex link
+at publish time.
+
+### 7. Onchain only where it must be; everything else is Convex
+The agent puts value, ownership, and trust-critical logic onchain, and accounts, sessions, profiles,
+leaderboards, and mutable app state in Convex. The vibe coder never sets up a database, writes auth, or
+configures an API — the template ships it and the agent extends it.
+
+### 8. Manage everything; hide everything they don't need
+Simple mode is the default. The app runs git, builds, installs, devnet, and the Convex backend underneath;
+the user sees their app running and a plain-language account of what happened — no PRs, no diffs, no raw
+errors, no CLI. Advanced users flip one toggle to get the full developer surface.
+
+### 9. The plan is always visible
+For any multi-step build, the agent makes a short, ordered plan and works it one step at a time. A pinned
+Project Plan panel shows what's done, what's running now, and what's next ("N of M Done") — in plain
+language. The user is never left wondering what the agent is doing.
 
 ## Anti-goals
 
