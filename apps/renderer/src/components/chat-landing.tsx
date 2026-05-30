@@ -357,7 +357,7 @@ function LaunchScreen() {
     if (result === null) {
       setError(
         useChatsStore.getState().error ??
-          `Project created, but couldn't start ${defaultProviderId}. Check its CLI is installed and signed in.`,
+        `Project created, but couldn't start ${defaultProviderId}. Check its CLI is installed and signed in.`,
       );
       setLaunching(false);
       return;
@@ -369,7 +369,7 @@ function LaunchScreen() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col px-6 py-6">
-      <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col gap-4">
+      <div className="mx-auto justify-center flex min-h-0 w-full max-w-5xl flex-1 flex-col gap-4">
         <div className="flex flex-col items-center gap-1.5 pt-2 text-center">
           <h1 className="text-3xl font-semibold tracking-tight text-foreground">
             Launch a Monad dApp
@@ -379,43 +379,41 @@ function LaunchScreen() {
             and the agent plans it with you.
           </p>
         </div>
-
-        <Card className="flex min-h-0 flex-1 flex-col rounded-xl border-border/50">
-          <CardPanel className="relative flex min-h-0 flex-1 flex-col gap-3 px-4 py-3">
-            <textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  openDialog();
-                }
-              }}
-              placeholder="e.g. an NFT mint with a gallery and a holders leaderboard"
-              className="min-h-0 w-full flex-1 resize-none bg-transparent text-base leading-relaxed text-foreground outline-none placeholder:text-muted-foreground"
+          <Card className="flex min-h-0 flex-1 flex-col rounded-xl border-border/50 max-h-60">
+            <CardPanel className="relative flex min-h-0 flex-1 flex-col gap-3 px-4 py-3">
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    openDialog();
+                  }
+                }}
+                placeholder="e.g. an NFT mint with a gallery and a holders leaderboard"
+                className="min-h-0  w-full flex-1 resize-none bg-transparent text-base leading-relaxed text-foreground outline-none placeholder:text-muted-foreground"
+              />
+              <div className="flex items-center justify-between">
+                <span className="inline-flex items-center rounded-md bg-primary/15 px-2 py-1 text-[11px] font-medium text-primary">
+                  Full Stack dApp
+                </span>
+                <Button onClick={openDialog} disabled={!promptReady}>
+                  <Rocket className="size-3.5" />
+                  Launch
+                </Button>
+              </div>
+            </CardPanel>
+          </Card>
+          <div className="flex items-center justify-start gap-2 pb-1 text-[11px] text-muted-foreground">
+            <span>or open an existing project</span>
+            <ProjectPicker
+              folders={folders}
+              selectedFolderId={null}
+              selectedName={null}
+              onPick={(id) => void selectFolder(id)}
+              onAdd={() => void addFolder()}
             />
-            <div className="flex items-center justify-between">
-              <span className="inline-flex items-center rounded-md bg-primary/15 px-2 py-1 text-[11px] font-medium text-primary">
-                Full Stack dApp
-              </span>
-              <Button onClick={openDialog} disabled={!promptReady}>
-                <Rocket className="size-3.5" />
-                Launch
-              </Button>
-            </div>
-          </CardPanel>
-        </Card>
-
-        <div className="flex items-center justify-center gap-2 pb-1 text-[11px] text-muted-foreground">
-          <span>or open an existing project</span>
-          <ProjectPicker
-            folders={folders}
-            selectedFolderId={null}
-            selectedName={null}
-            onPick={(id) => void selectFolder(id)}
-            onAdd={() => void addFolder()}
-          />
-        </div>
+          </div>
       </div>
 
       <Dialog
