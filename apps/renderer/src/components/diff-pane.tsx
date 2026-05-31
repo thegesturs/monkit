@@ -18,6 +18,7 @@ import type {
 } from "@memoize/wire";
 
 import { getRpcClient } from "../lib/rpc-client.ts";
+import { GitInitCta } from "./git-init-cta.tsx";
 import { gitChangesKey, useGitChangesStore } from "../store/git-changes.ts";
 import { gitStatusKey, useGitStatusStore } from "../store/git-status.ts";
 import { prDetailsKey, usePrDetailsStore } from "../store/pr-details.ts";
@@ -82,6 +83,11 @@ export function DiffPane({
       ? (s.errorByKey[gitChangesKey(folderId, worktreeId)] ?? null)
       : null,
   );
+  const changesErrorTag = useGitChangesStore((s) =>
+    folderId
+      ? (s.errorTagByKey[gitChangesKey(folderId, worktreeId)] ?? null)
+      : null,
+  );
   const refreshChanges = useGitChangesStore((s) => s.refresh);
   const refreshStatus = useGitStatusStore((s) => s.refresh);
   const refreshPrState = usePrStateStore((s) => s.refresh);
@@ -126,12 +132,15 @@ export function DiffPane({
         <Section
           title="Uncommitted"
           counter={
-            changesLoading && changes === null
+            changesErrorTag === "GitNotARepoError" ||
+            (changesLoading && changes === null)
               ? null
               : totalChanges
           }
         >
-          {changesError !== null ? (
+          {changesErrorTag === "GitNotARepoError" ? (
+            <GitInitCta folderId={folderId} worktreeId={worktreeId} />
+          ) : changesError !== null ? (
             <p className="text-rose-300/80">Couldn't read git status: {changesError}</p>
           ) : changesLoading && changes === null ? (
             <Indicator title="Reading working tree…" />
@@ -256,6 +265,7 @@ function FileRow({
         type="button"
         onClick={() =>
           openFileInTab({
+            kind: "text",
             folderId,
             worktreeId,
             path,
