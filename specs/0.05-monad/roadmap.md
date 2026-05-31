@@ -6,20 +6,21 @@ Each phase ships independently as one PR and ends with an end-to-end demo.
 wallet, deploy interface). **Phase 0 (templates) is the new starting point** for the work ahead, followed by
 the full-stack/Convex and Simple-mode phases.
 
-| Phase | Title | Demo |
-|---|---|---|
-| 0 | **Templates first** | Scaffold a full-stack starter (contract + frontend + Convex) → it installs, deploys, and runs in the in-app browser |
-| 1 | Foundations *(built)* | "Connected to testnet, block N" |
-| 2 | Wallet + network *(built)* | Burner generated, switch networks, faucet on testnet works |
-| 3 | Local devnet + compile + deploy *(interface built)* | Click Deploy → contract address in <5s on local |
-| 4 | Frontend auto-wire | Deploy a Counter → frontend hot-reloads with new address |
-| 5 | AI Monad tools + slash commands | Prompt: "deploy an ERC20" → agent does it end-to-end |
-| 6 | Explorer + frontend publish | Build → shareable URL → QR → phone uses dApp |
-| 7 | Convex backend (DB + auth) | Prompt "add a leaderboard" → Convex table fills, visible in the DB panel |
-| 8 | Simple mode (vibe-coder UX) | First-run user ships a full-stack dApp without seeing a key, ABI, diff, or CLI |
-| 9 | Project Plan panel | Agent plans a multi-step build → pinned checklist shows which step is live, "N of M Done" |
+| Phase | Title                                               | Demo                                                                                                                |
+| ----- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| 0     | **Templates first**                                 | Scaffold a full-stack starter (contract + frontend + Convex) → it installs, deploys, and runs in the in-app browser |
+| 1     | Foundations _(built)_                               | "Connected to testnet, block N"                                                                                     |
+| 2     | Wallet + network _(built)_                          | Burner generated, switch networks, faucet on testnet works                                                          |
+| 3     | Local devnet + compile + deploy _(interface built)_ | Click Deploy → contract address in <5s on local                                                                     |
+| 4     | Frontend auto-wire _(codegen + dev-server built)_   | Deploy a Counter → frontend bindings written → run the frontend in the in-app browser                               |
+| 5     | AI Monad tools + slash commands                     | Prompt: "deploy an ERC20" → agent does it end-to-end                                                                |
+| 6     | Explorer + frontend publish                         | Build → shareable URL → QR → phone uses dApp                                                                        |
+| 7     | Convex backend (DB + auth)                          | Prompt "add a leaderboard" → Convex table fills, visible in the DB panel                                            |
+| 8     | Simple mode (vibe-coder UX)                         | First-run user ships a full-stack dApp without seeing a key, ABI, diff, or CLI                                      |
+| 9     | Project Plan panel                                  | Agent plans a multi-step build → pinned checklist shows which step is live, "N of M Done"                           |
 
 ## Phase 0 — Templates first
+
 **Goal:** A working full-stack starter exists and can be scaffolded in seconds. This is the foundation the
 agent builds on and the first new slice to ship. See [features/templates.md](./features/templates.md).
 
@@ -32,6 +33,7 @@ agent builds on and the first new slice to ship. See [features/templates.md](./f
 frontend opens running in the in-app browser — no CLI.
 
 ## Phase 1 — Foundations
+
 **Goal:** Plumbing exists. Renderer can see the Monad mode tab group. RPC roundtrips work.
 
 - `packages/monad-core` skeleton with `networks.ts`, `rpc.ts` (viem PublicClient).
@@ -43,6 +45,7 @@ frontend opens running in the in-app browser — no CLI.
 **Done when:** toggle Monad mode → see new tab group → see live block height ticking on Monad testnet.
 
 ## Phase 2 — Wallet + network
+
 **Goal:** Users have a wallet. They can switch networks. They can request testnet funds.
 
 - `monad-core/wallet.ts` burner generation (viem `generatePrivateKey`).
@@ -56,6 +59,7 @@ frontend opens running in the in-app browser — no CLI.
 **Done when:** new burner created → switch Local↔Testnet → balance reflects active network → request testnet funds → sign a no-op message.
 
 ## Phase 3 — Local devnet + compile + deploy
+
 **Goal:** From a Foundry project, a single click compiles and deploys to local or testnet.
 
 - `monad-core/devnet.ts`: spawn anvil with Monad chain id via existing PTY infra. Port pick. Auto-restart. Clean shutdown on app quit.
@@ -67,16 +71,19 @@ frontend opens running in the in-app browser — no CLI.
 **Done when:** open a Foundry project with Monad mode → click Deploy → contract address in <5s on local; same flow on testnet.
 
 ## Phase 4 — Frontend auto-wire + ABI bindings
+
 **Goal:** Every deploy updates the frontend with no manual ABI copying.
 
-- `monad-core/codegen.ts`: on deploy, write `frontend/src/contracts/{addresses.ts, abis.ts, hooks.ts}` (wagmi v2 hooks). All files start with `// @generated`.
-- `monad.config.json` in project root declares contracts and frontend dir.
-- `ContractFunctionForm`: ABI-driven panel. Read functions show "Call", write show "Send", events show subscription.
-- Frontend dev server runner integrated with existing terminal pane (status chip in right pane).
+- `monad-core/codegen.ts` _(built)_: on every deploy, rewrite `frontend/src/contracts/{addresses.ts, abis.ts}` from the project's full deploy history + compiled ABIs. Both files start with `// @generated`; codegen refuses to clobber a file lacking that marker. Output matches the template's existing consumer shape — `addresses` keyed by chainId→contract (`getAddress(name, chainId)` in `index.ts`) and inline `abis` (`as const`). See [features/abi-autowire.md](./features/abi-autowire.md).
+- `monad-core/config.ts` _(built)_: read `monad.config.json` (`frontendDir`, default `frontend`); resolve `<frontendDir>/src/contracts`, no-op when no frontend package.
+- `monad.codegen` RPC + a **"Bindings"** (regenerate) button in the Deploy panel.
+- Frontend dev-server runner _(built)_: `monad.frontend.start/stop/status` spawns `<pm> run dev` (package manager auto-detected by lockfile), parses the dev URL, and the Deploy panel's **Frontend** strip runs/stops it + **Open** in the in-app browser.
+- **Deferred (fast-follow):** generated `hooks.ts` wagmi helpers, an in-IDE `ContractFunctionForm` interact panel, and `monad.config.json` hot-reload.
 
-**Done when:** deploy a Counter → TS bindings appear in frontend → call `increment()` from the in-app UI → frontend hot-reloads with the new address.
+**Done when:** deploy a Counter → `addresses.ts`/`abis.ts` are written → run the frontend → it loads in the in-app browser and can read/write the contract via `abis` + `getAddress`.
 
 ## Phase 5 — AI Monad tools + slash commands
+
 **Goal:** The AI agent can drive the full flow end-to-end with no user clicks.
 
 - `apps/mcp-server/src/tools/monad.ts`: register `monad_deploy`, `monad_call`, `monad_read`, `monad_balance`, `monad_estimate_gas`, `monad_sign_message`, `monad_get_address`, `monad_get_network`. Same registration pattern as `code_search`.
@@ -87,6 +94,7 @@ frontend opens running in the in-app browser — no CLI.
 **Done when:** prompt "make me an ERC20 called WAGMI, deploy to local, mint 1000 to my burner, then call balanceOf" → agent edits → compiles → deploys → calls → reports balance, all visible in the chat timeline.
 
 ## Phase 6 — Explorer + frontend publish
+
 **Goal:** Users can see what happened on-chain and share their dApp.
 
 - `ExplorerPanel`: local-indexed view of project tx history. Decodes logs against known ABIs from deploy history. Link-out to public Monad explorer for non-local txs.
@@ -98,6 +106,7 @@ frontend opens running in the in-app browser — no CLI.
 **Done when:** end-to-end demo — `monad new my-app` from template → AI vibe-codes a feature → deploy → publish → open shareable URL on phone → connect mobile wallet → interact.
 
 ## Phase 7 — Convex backend (DB + auth)
+
 **Goal:** Full-stack means a real backend. Offchain state lives in Convex, visible in-app, with auth working
 out of the box. See [features/convex-backend.md](./features/convex-backend.md).
 
@@ -110,6 +119,7 @@ out of the box. See [features/convex-backend.md](./features/convex-backend.md).
 table fills as the user interacts → data is visible in the Convex panel, no backend setup by the user.
 
 ## Phase 8 — Simple mode (vibe-coder UX)
+
 **Goal:** A first-time, non-developer user ships a full-stack dApp without seeing developer machinery. See
 [features/simple-mode.md](./features/simple-mode.md).
 
@@ -122,6 +132,7 @@ table fills as the user interacts → data is visible in the Convex panel, no ba
 git diff, or terminal.
 
 ## Phase 9 — Project Plan panel
+
 **Goal:** The agent follows a plan cleanly and the user always sees which step is happening now. See
 [features/project-plan.md](./features/project-plan.md).
 
@@ -136,6 +147,7 @@ time; completed steps check off and the counter advances.
 ## After 0.05
 
 Possible follow-ups (out of scope for this MVP):
+
 - **OpenClaw-style autonomous on-chain agents** (on-chain identity + auto wallet + Telegram bot + hosting) — explicitly deferred; secondary to the full-stack dApp loop.
 - Partner-protocol building blocks (DEX / NFT mint / staking templates + MCP blueprints).
 - Composer mode tabs beyond Full Stack Dapp (Program, Mobile, Games).

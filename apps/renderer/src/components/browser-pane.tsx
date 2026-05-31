@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, RotateCw, Star } from "lucide-react";
+
+import { useUiStore } from "../store/ui.ts";
 
 /**
  * In-app Browser tab — toolbar (back/forward/refresh/URL bar) + Electron
@@ -62,7 +64,7 @@ export function BrowserPane() {
     };
   }, []);
 
-  const navigate = (next: string) => {
+  const navigate = useCallback((next: string) => {
     const resolved = resolveUrl(next);
     if (resolved === null) return;
     setUrl(resolved);
@@ -77,7 +79,17 @@ export function BrowserPane() {
         wv.src = resolved;
       }
     }
-  };
+  }, []);
+
+  // Consume a URL queued by "Open in app browser" affordances (e.g. the Monad
+  // frontend runner), then clear it so re-opening the same URL re-triggers.
+  const pendingBrowserUrl = useUiStore((s) => s.pendingBrowserUrl);
+  const clearPendingBrowserUrl = useUiStore((s) => s.clearPendingBrowserUrl);
+  useEffect(() => {
+    if (pendingBrowserUrl === null) return;
+    navigate(pendingBrowserUrl);
+    clearPendingBrowserUrl();
+  }, [pendingBrowserUrl, clearPendingBrowserUrl, navigate]);
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();

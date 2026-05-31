@@ -33,10 +33,8 @@ const formatError = (err: unknown): string => {
   if (typeof err === "object" && err !== null && "_tag" in err) {
     const tag = String((err as { _tag: unknown })._tag);
     if (tag === "FsPathOutsideError") {
-      const p =
-        "path" in (err as Record<string, unknown>)
-          ? String((err as { path: unknown }).path)
-          : null;
+      const record = err as Record<string, unknown>;
+      const p = "path" in record ? String(record.path) : null;
       return p === null
         ? "This file is outside the current project."
         : `This file is outside the current project (${p}).`;

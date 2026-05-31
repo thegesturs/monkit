@@ -192,3 +192,51 @@ export const ListDeploysRpc = Rpc.make("monad.deploy.list", {
   success: Schema.Array(DeployRecord),
   error: MonadRpcError,
 });
+
+// ===== Phase 4: Frontend auto-wire (codegen + dev-server runner) =====
+
+/**
+ * Regenerate `frontend/src/contracts/{addresses.ts,abis.ts}` from the
+ * project's deploy history + compiled ABIs. `written`/`skipped` are the file
+ * names touched vs left alone (skipped = lacked the `@generated` marker, so
+ * we refused to clobber a hand-edited file). `frontendMissing` is true when
+ * the project has no frontend package — the renderer shows a hint instead of
+ * an error.
+ */
+export const CodegenResultSchema = Schema.Struct({
+  written: Schema.Array(Schema.String),
+  skipped: Schema.Array(Schema.String),
+  frontendMissing: Schema.Boolean,
+});
+
+export const MonadCodegenRpc = Rpc.make("monad.codegen", {
+  payload: Schema.Struct({ projectId: Schema.String }),
+  success: CodegenResultSchema,
+  error: MonadRpcError,
+});
+
+/** Status of the per-project frontend dev server (one running at a time). */
+export const FrontendStatusSchema = Schema.Struct({
+  running: Schema.Boolean,
+  url: Schema.NullOr(Schema.String),
+  pm: Schema.NullOr(Schema.String),
+  projectId: Schema.NullOr(Schema.String),
+});
+
+export const FrontendStartRpc = Rpc.make("monad.frontend.start", {
+  payload: Schema.Struct({ projectId: Schema.String }),
+  success: FrontendStatusSchema,
+  error: MonadRpcError,
+});
+
+export const FrontendStopRpc = Rpc.make("monad.frontend.stop", {
+  payload: Schema.Struct({}),
+  success: FrontendStatusSchema,
+  error: MonadRpcError,
+});
+
+export const FrontendStatusRpc = Rpc.make("monad.frontend.status", {
+  payload: Schema.Struct({}),
+  success: FrontendStatusSchema,
+  error: MonadRpcError,
+});

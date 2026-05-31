@@ -10,6 +10,25 @@ export interface CompiledContract {
   readonly name: string;
   readonly abi: Abi;
   readonly bytecode: Hex;
+  /** Solidity source path from the artifact metadata, e.g. "src/Counter.sol". */
+  readonly sourcePath: string | null;
+}
+
+/**
+ * Whether an artifact is one of the user's own deployable contracts (under
+ * `src/`) vs a dependency, test, or script. Foundry compiles forge-std and
+ * test/script contracts into `out/` too, and many carry creation bytecode —
+ * we don't want them cluttering the deploy picker. `null` source (metadata
+ * disabled) is kept, since we can't tell.
+ */
+function isDeployableSource(sourcePath: string | null): boolean {
+  if (sourcePath === null) return true;
+  const p = sourcePath.replace(/^\.?\//, "");
+  if (p.startsWith("lib/") || p.includes("/lib/")) return false;
+  if (p.startsWith("test/") || p.includes("/test/")) return false;
+  if (p.startsWith("script/") || p.includes("/script/")) return false;
+  if (/\.t\.sol$/.test(p) || /\.s\.sol$/.test(p)) return false;
+  return true;
 }
 
 /** True if the Foundry `forge` binary is available on PATH. */
@@ -42,13 +61,14 @@ export async function compileProject(projectRoot: string): Promise<void> {
 }
 
 /**
- * List deployable contracts found in `out/` after a build — i.e. artifacts
- * that carry non-empty creation bytecode (skips interfaces/abstracts/libs).
+ * List deployable contracts found in the Foundry artifact dir after a build —
+ * artifacts that carry non-empty creation bytecode and live under the
+ * project's own `src/` (skips forge-std, tests, scripts, interfaces/libs).
+ * `outDir` is the absolute artifact dir (see `resolveContracts` in config.ts).
  */
 export async function listCompiledContracts(
-  projectRoot: string,
+  outDir: string,
 ): Promise<readonly CompiledContract[]> {
-  const outDir = join(projectRoot, "out");
   const found: CompiledContract[] = [];
 
   let entries: string[];
@@ -69,7 +89,9 @@ export async function listCompiledContracts(
     for (const file of files) {
       if (!file.endsWith(".json")) continue;
       const parsed = await readArtifactFile(join(outDir, dir, file));
-      if (parsed !== null) found.push(parsed);
+      if (parsed !== null && isDeployableSource(parsed.sourcePath)) {
+        found.push(parsed);
+      }
     }
   }
 
@@ -79,17 +101,15 @@ export async function listCompiledContracts(
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** Read + parse a single Foundry artifact for a named contract. */
+/**
+ * Read + parse a single Foundry artifact for a named contract. `outDir` is the
+ * absolute artifact dir (see `resolveContracts` in config.ts).
+ */
 export async function readArtifact(
-  projectRoot: string,
+  outDir: string,
   contractName: string,
 ): Promise<CompiledContract> {
-  const path = join(
-    projectRoot,
-    "out",
-    `${contractName}.sol`,
-    `${contractName}.json`,
-  );
+  const path = join(outDir, `${contractName}.sol`, `${contractName}.json`);
   const parsed = await readArtifactFile(path);
   if (parsed === null) {
     throw new Error(
@@ -111,6 +131,7 @@ async function readArtifactFile(
   let json: {
     abi?: Abi;
     bytecode?: { object?: string };
+    metadata?: { settings?: { compilationTarget?: Record<string, string> } };
   };
   try {
     json = JSON.parse(raw);
@@ -125,5 +146,7 @@ async function readArtifactFile(
       .split("/")
       .pop()
       ?.replace(/\.json$/, "") ?? "Contract";
-  return { name, abi: json.abi ?? [], bytecode };
+  const target = json.metadata?.settings?.compilationTarget;
+  const sourcePath = target ? (Object.keys(target)[0] ?? null) : null;
+  return { name, abi: json.abi ?? [], bytecode, sourcePath };
 }

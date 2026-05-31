@@ -197,6 +197,41 @@ const ListDeploys = MemoizeRpcs.toLayerHandler("monad.deploy.list", (payload) =>
   }),
 );
 
+// ===== Phase 4 Frontend auto-wire handlers =====
+const Codegen = MemoizeRpcs.toLayerHandler("monad.codegen", (payload) =>
+  Effect.gen(function* () {
+    const svc = yield* MonadDeployService;
+    return yield* svc
+      .regenerateBindings(payload.projectId)
+      .pipe(Effect.mapError(toMonadRpcError));
+  }),
+);
+
+const FrontendStart = MemoizeRpcs.toLayerHandler(
+  "monad.frontend.start",
+  (payload) =>
+    Effect.gen(function* () {
+      const svc = yield* MonadDeployService;
+      return yield* svc
+        .frontendStart(payload.projectId)
+        .pipe(Effect.mapError(toMonadRpcError));
+    }),
+);
+
+const FrontendStop = MemoizeRpcs.toLayerHandler("monad.frontend.stop", () =>
+  Effect.gen(function* () {
+    const svc = yield* MonadDeployService;
+    return yield* svc.frontendStop().pipe(Effect.mapError(toMonadRpcError));
+  }),
+);
+
+const FrontendStatus = MemoizeRpcs.toLayerHandler("monad.frontend.status", () =>
+  Effect.gen(function* () {
+    const svc = yield* MonadDeployService;
+    return yield* svc.frontendStatus().pipe(Effect.mapError(toMonadRpcError));
+  }),
+);
+
 export const MonadHandlersLayer = Layer.mergeAll(
   GetBlockNumber,
   GetActiveNetwork,
@@ -215,4 +250,9 @@ export const MonadHandlersLayer = Layer.mergeAll(
   Compile,
   DeployContract,
   ListDeploys,
+  // Phase 4
+  Codegen,
+  FrontendStart,
+  FrontendStop,
+  FrontendStatus,
 );
