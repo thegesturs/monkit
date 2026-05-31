@@ -3,20 +3,27 @@ import keytar from "keytar";
 import { SqlClient } from "@effect/sql";
 import { Effect, Layer } from "effect";
 import {
+  type CodegenContract,
   compileProject,
   deployContract,
+  detectPackageManager,
   getNetwork,
   hasFoundry,
   listCompiledContracts,
   type NetworkId,
+  parseDevServerUrl,
   readArtifact,
+  resolveFrontend,
+  writeFrontendBindings,
 } from "@memoize/monad-core";
 
 import {
   MonadDeployService,
+  type CodegenResultInfo,
   type CompiledContractInfo,
   type DeployRecordRow,
   type DevnetStatusInfo,
+  type FrontendStatusInfo,
 } from "../services/monad-deploy-service.ts";
 
 const SERVICE_NAME = "memoize";
@@ -27,6 +34,44 @@ const NETWORK_IDS: readonly NetworkId[] = ["local", "testnet", "mainnet"];
 
 /** Module-level anvil handle — one local devnet per app instance. */
 let anvil: ChildProcess | null = null;
+
+/** Module-level frontend dev-server handle — one running frontend per app instance. */
+let frontend: ChildProcess | null = null;
+let frontendUrl: string | null = null;
+let frontendPm: string | null = null;
+let frontendProjectId: string | null = null;
+
+function frontendStatusInfo(): FrontendStatusInfo {
+  const running =
+    frontend !== null && frontend.exitCode === null && !frontend.killed;
+  return {
+    running,
+    url: running ? frontendUrl : null,
+    pm: running ? frontendPm : null,
+    projectId: running ? frontendProjectId : null,
+  };
+}
+
+function killFrontend(): void {
+  if (frontend !== null) {
+    frontend.kill();
+    frontend = null;
+  }
+  frontendUrl = null;
+  frontendPm = null;
+  frontendProjectId = null;
+}
+
+/** Poll until the dev server prints a localhost URL, or time out (returns null). */
+async function waitForFrontendUrl(timeoutMs = 20_000): Promise<string | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (frontendUrl !== null) return frontendUrl;
+    if (frontend === null || frontend.exitCode !== null) return null;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return null;
+}
 
 function asNetworkId(network: string): NetworkId {
   if ((NETWORK_IDS as readonly string[]).includes(network)) {
@@ -112,6 +157,94 @@ export const MonadDeployServiceLive = Layer.effect(
           return yield* Effect.fail(new Error(`Unknown project: ${projectId}`));
         }
         return root;
+      });
+
+    /**
+     * Rebuild the frontend binding files for a project from the full deploy
+     * history (every chainId an address was deployed to) plus the freshest
+     * compiled ABIs. Rendering wholesale means re-deploys preserve other
+     * networks and overwrite only what changed. No-ops cleanly when the
+     * project has no frontend package.
+     */
+    const gatherBindings = (projectId: string, root: string) =>
+      Effect.gen(function* () {
+        const resolved = yield* tryPromise(() => resolveFrontend(root));
+        if (!resolved.exists) {
+          return {
+            written: [],
+            skipped: [],
+            frontendMissing: true,
+          } satisfies CodegenResultInfo;
+        }
+
+        // Fresh ABIs from a build; fall back to whatever's already in out/ if
+        // the build fails (e.g. a transient compile error) so codegen still
+        // updates addresses.
+        const compiled = yield* tryPromise(async () => {
+          if (!(await hasFoundry())) return [];
+          try {
+            await compileProject(root);
+          } catch {
+            // fall through to whatever artifacts exist
+          }
+          return listCompiledContracts(root);
+        }).pipe(Effect.catchAll(() => Effect.succeed([] as never[])));
+
+        const abiByName = new Map<string, CodegenContract["abi"]>();
+        for (const c of compiled) abiByName.set(c.name, c.abi);
+
+        // Oldest-first so a re-deploy to the same chain overwrites the earlier
+        // address for that (contract, chainId).
+        const rows = yield* sql<{
+          network: string;
+          contractName: string;
+          address: string;
+        }>`
+          SELECT network, contract_name AS contractName, address
+          FROM monad_deploys
+          WHERE project_id = ${projectId}
+          ORDER BY deployed_at ASC
+        `;
+
+        const addrByName = new Map<string, Map<number, string>>();
+        for (const row of rows) {
+          let chainId: number;
+          try {
+            chainId = getNetwork(asNetworkId(row.network)).chainId;
+          } catch {
+            continue; // unknown network label — skip rather than poison output
+          }
+          const row2 = addrByName.get(row.contractName) ?? new Map();
+          row2.set(chainId, row.address);
+          addrByName.set(row.contractName, row2);
+        }
+
+        const names = new Set<string>([
+          ...abiByName.keys(),
+          ...addrByName.keys(),
+        ]);
+        const contracts: CodegenContract[] = [...names].map((name) => ({
+          name,
+          abi: abiByName.get(name) ?? [],
+          addresses: [...(addrByName.get(name)?.entries() ?? [])].map(
+            ([chainId, address]) => ({
+              chainId,
+              address: address as `0x${string}`,
+            }),
+          ),
+        }));
+
+        const result = yield* tryPromise(() =>
+          writeFrontendBindings({
+            contractsDir: resolved.contractsDir,
+            contracts,
+          }),
+        );
+        return {
+          written: result.written,
+          skipped: result.skipped,
+          frontendMissing: false,
+        } satisfies CodegenResultInfo;
       });
 
     const compile = (projectId: string) =>
@@ -225,6 +358,17 @@ export const MonadDeployServiceLive = Layer.effect(
             (${id}, ${input.projectId}, ${input.network}, ${input.contractName}, ${result.address}, ${result.txHash}, ${blockNumber}, ${argsJson}, ${now})
         `;
 
+        // Auto-wire the frontend bindings. Best-effort — a codegen failure must
+        // never fail an otherwise-successful deploy (the contract is already
+        // on-chain and recorded). We log and move on.
+        yield* gatherBindings(input.projectId, root).pipe(
+          Effect.catchAll((cause) =>
+            Effect.logWarning(
+              `codegen after deploy failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+            ),
+          ),
+        );
+
         return {
           id,
           projectId: input.projectId,
@@ -300,6 +444,64 @@ export const MonadDeployServiceLive = Layer.effect(
 
     const devnetStatus = () => Effect.sync(() => localDevnetStatus());
 
+    const regenerateBindings = (projectId: string) =>
+      Effect.gen(function* () {
+        const root = yield* projectRoot(projectId);
+        return yield* gatherBindings(projectId, root);
+      });
+
+    const frontendStart = (projectId: string) =>
+      Effect.gen(function* () {
+        const root = yield* projectRoot(projectId);
+        const resolved = yield* tryPromise(() => resolveFrontend(root));
+        if (!resolved.exists) {
+          return yield* Effect.fail(
+            new Error("This project has no frontend package to run."),
+          );
+        }
+
+        const current = frontendStatusInfo();
+        if (current.running && frontendProjectId === projectId) return current;
+        // A different project's server is running — replace it.
+        if (current.running) killFrontend();
+
+        const pm = yield* tryPromise(() =>
+          detectPackageManager(resolved.frontendDir),
+        );
+
+        const child = spawn(pm, ["run", "dev"], {
+          cwd: resolved.frontendDir,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        frontend = child;
+        frontendUrl = null;
+        frontendPm = pm;
+        frontendProjectId = projectId;
+
+        const onData = (buf: Buffer) => {
+          if (frontendUrl === null) {
+            const url = parseDevServerUrl(buf.toString());
+            if (url !== null) frontendUrl = url;
+          }
+        };
+        child.stdout?.on("data", onData);
+        child.stderr?.on("data", onData);
+        child.on("exit", () => {
+          if (frontend === child) killFrontend();
+        });
+
+        yield* tryPromise(() => waitForFrontendUrl());
+        return frontendStatusInfo();
+      });
+
+    const frontendStop = () =>
+      Effect.sync(() => {
+        killFrontend();
+        return frontendStatusInfo();
+      });
+
+    const frontendStatus = () => Effect.sync(() => frontendStatusInfo());
+
     return {
       compile,
       deploy,
@@ -307,6 +509,10 @@ export const MonadDeployServiceLive = Layer.effect(
       devnetStart,
       devnetStop,
       devnetStatus,
+      regenerateBindings,
+      frontendStart,
+      frontendStop,
+      frontendStatus,
     };
   }),
 );

@@ -141,6 +141,11 @@ import {
   CompileRpc,
   DeployContractRpc,
   ListDeploysRpc,
+  // Phase 4
+  MonadCodegenRpc,
+  FrontendStartRpc,
+  FrontendStopRpc,
+  FrontendStatusRpc,
 } from "./monad.ts";
 
 /**
@@ -270,6 +275,11 @@ export const MemoizeRpcs = RpcGroup.make(
   CompileRpc,
   DeployContractRpc,
   ListDeploysRpc,
+  // Phase 4 frontend auto-wire
+  MonadCodegenRpc,
+  FrontendStartRpc,
+  FrontendStopRpc,
+  FrontendStatusRpc,
 );
 export type MemoizeRpcs = typeof MemoizeRpcs;
 

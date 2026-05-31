@@ -6,75 +6,66 @@ The split-brain between contract addresses + ABIs (Solidity world) and the React
 
 ## What gets written
 
-On every successful deploy, `monad-core/codegen.ts` writes three files into `<frontendDir>/src/contracts/`:
+On every successful deploy, `monad-core/codegen.ts` writes two files into `<frontendDir>/src/contracts/`. The shape matches what the starter template's `index.ts` already consumes (`getAddress(name, chainId)` + `export * from "./abis"`) — **addresses are keyed by chainId then contract name**, and ABIs are inlined (no separate `.abi.json`, so no JSON-module tsconfig setup is needed).
 
 ### `addresses.ts`
 
 ```ts
-// @generated — do not edit. Updated on every deploy.
-import type { Address } from "viem"
+// @generated — written by the deploy flow on every deploy. Don't hand-edit.
+// Shape: { [chainId]: { [contractName]: "0x..." } }. Empty until the first deploy.
 
-export const addresses = {
-  Counter: {
-    local: "0x5FbDB2315678afecb367f032d93F642f64180aa3" as Address,
-    testnet: "0xabc..." as Address,
+export const addresses: Record<number, Record<string, `0x${string}`>> = {
+  10143: {
+    Counter: "0xabc...",
   },
-  WAGMI: {
-    local: "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512" as Address,
+  41454: {
+    Counter: "0x5FbDB2315678afecb367f032d93F642f64180aa3",
   },
-} as const
-
-export type ContractName = keyof typeof addresses
+};
 ```
+
+The template's `index.ts` resolves an address with `getAddress(name, chainId)` → `addresses[chainId]?.[name]`.
 
 ### `abis.ts`
 
 ```ts
-// @generated
-import counterAbi from "./Counter.abi.json"
-import wagmiAbi from "./WAGMI.abi.json"
+// @generated — the deploy flow writes contract ABIs here on every deploy.
+// Empty until the first deploy. Don't hand-edit.
 
 export const abis = {
-  Counter: counterAbi,
-  WAGMI: wagmiAbi,
-} as const
+  Counter: [
+    {
+      type: "function",
+      name: "count",
+      inputs: [],
+      outputs: [{ type: "uint256" }],
+      stateMutability: "view",
+    },
+    // ...
+  ] as const,
+} as const;
+
+export type ContractName = keyof typeof abis;
 ```
 
-Plus one `<Contract>.abi.json` per contract written next to it.
+Consumers call contracts directly with wagmi/viem using `abis.Counter` + `getAddress("Counter", chainId)`.
 
-### `hooks.ts` (wagmi v2)
+### `hooks.ts` (wagmi v2) — deferred
 
-```ts
-// @generated
-import { useReadContract, useWriteContract } from "wagmi"
-import { abis } from "./abis"
-import { addresses } from "./addresses"
-import type { Address } from "viem"
-
-export function useCounter(network: keyof typeof addresses.Counter) {
-  const address = addresses.Counter[network]
-  return {
-    useCount: () => useReadContract({ abi: abis.Counter, address, functionName: "count" }),
-    useIncrement: () => useWriteContract(),
-  }
-}
-// ... one per contract
-```
-
-The hook shape is opinionated; users who want raw access import `abis` + `addresses` directly.
+Generated wagmi hooks (`useCounter`, etc.) are a fast-follow. Raw `abis` + `addresses` + `getAddress` are enough to call contracts today; the hook layer is opinionated and lands later.
 
 ## Generation rules
 
-- Files start with `// @generated`. Codegen refuses to overwrite files lacking that header (protection against trashing user-written files).
-- ABIs are written even for contracts never deployed, when the user explicitly runs "Regenerate bindings" (so the frontend can be imported before deploy).
-- `addresses.ts` keeps all networks the contract has been deployed to. Re-deploying to the same network overwrites that entry.
+- Both files start with `// @generated`. Codegen refuses to overwrite a file whose first line lacks that marker (protection against trashing hand-written files); it reports those in `skipped`.
+- Codegen rebuilds the files **wholesale** from the project's full `monad_deploys` history (every chainId an address was deployed to) plus the freshest compiled ABIs — so re-deploys naturally preserve other networks and overwrite only the redeployed (contract, chainId).
+- ABIs are written for every compiled contract (even never-deployed ones) so the frontend can import bindings before the first deploy.
 
 ## Trigger points
 
-1. Successful deploy (auto).
-2. Manual "Regenerate bindings" button in Contracts panel.
-3. `monad_codegen` MCP tool (lets the AI explicitly refresh after editing ABI shape).
-4. Renaming or removing a contract: requires manual "Regenerate" since we don't want to delete bindings on accident.
+1. Successful deploy (auto, best-effort — a codegen failure never fails the deploy).
+2. Manual **"Bindings"** (regenerate) button in the Deploy panel → `monad.codegen` RPC.
+3. `monad_codegen` MCP tool (Phase 5 — lets the AI explicitly refresh after editing ABI shape).
+4. Renaming or removing a contract: requires manual "Bindings" since we don't want to delete bindings on accident.
 
 ## Config
 

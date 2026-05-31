@@ -2,9 +2,13 @@ import { Effect } from "effect";
 import {
   CheckCircle2,
   ExternalLink,
+  Globe,
   Hammer,
+  Play,
+  RefreshCw,
   Rocket,
   Server,
+  Square,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
@@ -12,7 +16,9 @@ import type { CompiledContractInfo, DeployRecord } from "@memoize/wire";
 
 import { getRpcClient } from "../../lib/rpc-client.ts";
 import { useMonadStore } from "../../store/monad.ts";
+import { useUiStore } from "../../store/ui.ts";
 import { Button } from "../ui/button.tsx";
+import { toastManager } from "../ui/toast.tsx";
 import {
   Empty,
   EmptyDescription,
@@ -40,6 +46,7 @@ export function DeployPanel({
   projectId: string;
 }): React.ReactElement {
   const network = useMonadStore((s) => s.activeNetwork);
+  const openInBrowser = useUiStore((s) => s.openInBrowser);
 
   const [compile, setCompile] = useState<CompileState>({ kind: "idle" });
   const [selected, setSelected] = useState<string | null>(null);
@@ -49,6 +56,13 @@ export function DeployPanel({
   const [deploys, setDeploys] = useState<readonly DeployRecord[]>([]);
   const [devnetRunning, setDevnetRunning] = useState(false);
   const [devnetBusy, setDevnetBusy] = useState(false);
+  const [frontend, setFrontend] = useState<{
+    running: boolean;
+    url: string | null;
+    pm: string | null;
+  }>({ running: false, url: null, pm: null });
+  const [frontendBusy, setFrontendBusy] = useState(false);
+  const [codegenBusy, setCodegenBusy] = useState(false);
 
   const loadHistory = useCallback(async () => {
     try {
@@ -72,10 +86,98 @@ export function DeployPanel({
     }
   }, []);
 
+  const refreshFrontend = useCallback(async () => {
+    try {
+      const client = await getRpcClient();
+      const status = await Effect.runPromise(
+        client.monad["frontend.status"]({}),
+      );
+      setFrontend({ running: status.running, url: status.url, pm: status.pm });
+    } catch {
+      setFrontend({ running: false, url: null, pm: null });
+    }
+  }, []);
+
   useEffect(() => {
     void loadHistory();
     void refreshDevnet();
-  }, [loadHistory, refreshDevnet]);
+    void refreshFrontend();
+  }, [loadHistory, refreshDevnet, refreshFrontend]);
+
+  const startFrontend = async () => {
+    setFrontendBusy(true);
+    try {
+      const client = await getRpcClient();
+      const status = await Effect.runPromise(
+        client.monad["frontend.start"]({ projectId }),
+      );
+      setFrontend({ running: status.running, url: status.url, pm: status.pm });
+      if (status.url !== null) {
+        openInBrowser(status.url);
+      } else {
+        toastManager.add({
+          title: "Frontend starting",
+          description: "Waiting for the dev server to report its URL…",
+        });
+      }
+    } catch (err) {
+      toastManager.add({
+        title: "Couldn’t start the frontend",
+        description: err instanceof Error ? err.message : String(err),
+        type: "error",
+      });
+    } finally {
+      setFrontendBusy(false);
+    }
+  };
+
+  const stopFrontend = async () => {
+    setFrontendBusy(true);
+    try {
+      const client = await getRpcClient();
+      await Effect.runPromise(client.monad["frontend.stop"]({}));
+      setFrontend({ running: false, url: null, pm: null });
+    } catch {
+      await refreshFrontend();
+    } finally {
+      setFrontendBusy(false);
+    }
+  };
+
+  const regenerateBindings = async () => {
+    setCodegenBusy(true);
+    try {
+      const client = await getRpcClient();
+      const res = await Effect.runPromise(
+        client.monad["codegen"]({ projectId }),
+      );
+      if (res.frontendMissing) {
+        toastManager.add({
+          title: "No frontend to wire",
+          description: "This project has no frontend package.",
+        });
+      } else {
+        const parts: string[] = [];
+        if (res.written.length > 0)
+          parts.push(`updated ${res.written.join(", ")}`);
+        if (res.skipped.length > 0)
+          parts.push(`skipped ${res.skipped.join(", ")} (hand-edited)`);
+        toastManager.add({
+          title: "Bindings regenerated",
+          description: parts.join(" · ") || "Nothing to write yet.",
+          type: "success",
+        });
+      }
+    } catch (err) {
+      toastManager.add({
+        title: "Couldn’t regenerate bindings",
+        description: err instanceof Error ? err.message : String(err),
+        type: "error",
+      });
+    } finally {
+      setCodegenBusy(false);
+    }
+  };
 
   const runCompile = async () => {
     setCompile({ kind: "compiling" });
@@ -91,7 +193,8 @@ export function DeployPanel({
         return;
       }
       setCompile({ kind: "ready", contracts: res.contracts });
-      if (res.contracts.length === 1) setSelected(res.contracts[0].name);
+      const only = res.contracts.length === 1 ? res.contracts[0] : null;
+      if (only) setSelected(only.name);
     } catch (err) {
       setCompile({
         kind: "error",
@@ -173,6 +276,55 @@ export function DeployPanel({
           ) : null}
         </div>
       ) : null}
+
+      {/* Frontend dev server + bindings */}
+      <div className="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2 text-xs">
+          <Globe className="size-3.5 shrink-0 text-muted-foreground" />
+          <span className="text-muted-foreground">Frontend</span>
+          <span
+            className={
+              frontend.running
+                ? "truncate text-success-foreground"
+                : "text-muted-foreground"
+            }
+          >
+            {frontend.running ? (frontend.url ?? "running") : "stopped"}
+          </span>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            size="xs"
+            variant="ghost"
+            loading={codegenBusy}
+            onClick={() => void regenerateBindings()}
+            title="Rewrite frontend/src/contracts from deploy history"
+          >
+            <RefreshCw />
+            Bindings
+          </Button>
+          {frontend.running && frontend.url !== null ? (
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => openInBrowser(frontend.url as string)}
+            >
+              Open
+            </Button>
+          ) : null}
+          <Button
+            size="xs"
+            variant="outline"
+            loading={frontendBusy}
+            onClick={() =>
+              void (frontend.running ? stopFrontend() : startFrontend())
+            }
+          >
+            {frontend.running ? <Square /> : <Play />}
+            {frontend.running ? "Stop" : "Run"}
+          </Button>
+        </div>
+      </div>
 
       <div className="flex flex-col gap-3 p-3">
         {/* Compile + contract selection */}

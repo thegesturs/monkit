@@ -27,7 +27,7 @@ export function MarkdownBody({ children }: { children: string }) {
                 if (typeof href !== "string") return;
                 if (!/^https?:\/\//i.test(href)) return;
                 e.preventDefault();
-                window.memoize?.app.openExternal(href);
+                window.memoize?.app?.openExternal(href);
               }}
             >
               {children}
