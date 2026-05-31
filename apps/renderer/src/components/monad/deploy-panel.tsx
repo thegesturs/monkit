@@ -3,6 +3,7 @@ import {
   CheckCircle2,
   ExternalLink,
   FileCode2,
+  Fuel,
   Globe,
   Hammer,
   Loader2,
@@ -11,10 +12,15 @@ import {
   Rocket,
   Server,
   Square,
+  TriangleAlert,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
-import type { CompiledContractInfo, DeployRecord } from "@memoize/wire";
+import type {
+  CompiledContractInfo,
+  DeployRecord,
+  NetworkId,
+} from "@memoize/wire";
 
 import { getRpcClient } from "../../lib/rpc-client.ts";
 import { useMonadStore } from "../../store/monad.ts";
@@ -48,6 +54,7 @@ export function DeployPanel({
   projectId: string;
 }): React.ReactElement {
   const network = useMonadStore((s) => s.activeNetwork);
+  const setActiveNetwork = useMonadStore((s) => s.setActiveNetwork);
   const openInBrowser = useUiStore((s) => s.openInBrowser);
 
   const [compile, setCompile] = useState<CompileState>({ kind: "idle" });
@@ -359,9 +366,12 @@ export function DeployPanel({
           {compile.kind === "no-foundry" ? (
             <FoundryBanner />
           ) : compile.kind === "error" ? (
-            <p className="rounded-md bg-destructive/10 px-2.5 py-1.5 font-mono text-[11px] text-destructive-foreground whitespace-pre-wrap">
-              {compile.message}
-            </p>
+            <MonadErrorCard
+              message={compile.message}
+              network={network}
+              context="compile"
+              onSwitchNetwork={(id) => void setActiveNetwork(id)}
+            />
           ) : compile.kind === "ready" ? (
             compile.contracts.length === 0 ? (
               <p className="text-xs text-muted-foreground">
@@ -441,9 +451,12 @@ export function DeployPanel({
               </p>
             ) : null}
             {deployError !== null ? (
-              <p className="rounded-md bg-destructive/10 px-2.5 py-1.5 font-mono text-[11px] text-destructive-foreground whitespace-pre-wrap">
-                {deployError}
-              </p>
+              <MonadErrorCard
+                message={deployError}
+                network={network}
+                context="deploy"
+                onSwitchNetwork={(id) => void setActiveNetwork(id)}
+              />
             ) : null}
           </div>
         ) : null}
@@ -472,6 +485,123 @@ export function DeployPanel({
         ) : null}
       </div>
     </div>
+  );
+}
+
+/**
+ * The signer/`from` address in an error, if any. The negative lookahead keeps
+ * us from matching a 40-hex slice inside a longer hex blob (e.g. the raw tx or
+ * contract bytecode the RPC echoes back) — only a real, bounded address wins.
+ */
+function extractAddress(message: string): string | null {
+  const m = message.match(/0x[0-9a-fA-F]{40}(?![0-9a-fA-F])/);
+  return m ? m[0] : null;
+}
+
+/**
+ * A compile/deploy failure shown as a clean, human-readable card instead of a
+ * raw RPC dump: a one-line cause, a call-to-action where one exists (fund the
+ * wallet, switch network), and the full message tucked behind "Details".
+ */
+function MonadErrorCard({
+  message,
+  network,
+  context,
+  onSwitchNetwork,
+}: {
+  message: string;
+  network: NetworkId;
+  context: "deploy" | "compile";
+  onSwitchNetwork: (id: NetworkId) => void;
+}): React.ReactElement {
+  const lower = message.toLowerCase();
+  const isFunds =
+    /insufficient (balance|funds)|had insufficient|insufficient funds for gas/.test(
+      lower,
+    );
+  const isBuild =
+    context === "compile" ||
+    /compiler run failed|error \(\d+\)|\bsolc\b|\s-->\s/.test(lower);
+
+  // Out-of-gas — the most common deploy failure. Point the user at funds.
+  if (isFunds) {
+    const faucetUrl = NETWORK_META[network].faucetUrl;
+    const addr = extractAddress(message);
+    return (
+      <div className="flex flex-col gap-2 rounded-lg border border-warning/40 bg-warning/10 p-3">
+        <div className="flex items-center gap-1.5 text-xs font-medium text-warning-foreground">
+          <Fuel className="size-3.5 shrink-0" />
+          Not enough gas to deploy
+        </div>
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          Your app wallet{addr ? ` (${truncateAddress(addr)})` : ""} has no MON
+          to pay for this deployment
+          {faucetUrl !== null
+            ? ". Grab some test MON, then deploy again."
+            : network === "local"
+              ? ". The local devnet hasn’t funded it — switch to Testnet and use the faucet."
+              : "."}
+        </p>
+        <div className="flex flex-wrap gap-1.5">
+          {faucetUrl !== null ? (
+            <Button size="xs" onClick={() => openExternal(faucetUrl)}>
+              <ExternalLink />
+              Get test MON
+            </Button>
+          ) : network === "local" ? (
+            <Button size="xs" onClick={() => onSwitchNetwork("testnet")}>
+              Switch to Testnet
+            </Button>
+          ) : null}
+        </div>
+        <ErrorDetails message={message} />
+      </div>
+    );
+  }
+
+  // Solidity build failures — the diagnostic text is the value, keep it
+  // readable but contained.
+  if (isBuild) {
+    return (
+      <div className="flex flex-col gap-1.5 rounded-lg border border-destructive/40 bg-destructive/10 p-3">
+        <div className="flex items-center gap-1.5 text-xs font-medium text-destructive-foreground">
+          <TriangleAlert className="size-3.5 shrink-0" />
+          Build failed
+        </div>
+        <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded bg-background/40 p-2 font-mono text-[11px] text-muted-foreground">
+          {message.trim()}
+        </pre>
+      </div>
+    );
+  }
+
+  // Anything else — summarise to the first line, full text under Details.
+  const firstLine = message.split("\n")[0]?.trim() ?? message;
+  return (
+    <div className="flex flex-col gap-1.5 rounded-lg border border-destructive/40 bg-destructive/10 p-3">
+      <div className="flex items-center gap-1.5 text-xs font-medium text-destructive-foreground">
+        <TriangleAlert className="size-3.5 shrink-0" />
+        Deploy failed
+      </div>
+      <p className="text-[11px] leading-relaxed text-muted-foreground">
+        {firstLine.length > 160 ? `${firstLine.slice(0, 160)}…` : firstLine}
+      </p>
+      <ErrorDetails message={message} />
+    </div>
+  );
+}
+
+/** Collapsible raw error text — hidden by default so the card stays clean. */
+function ErrorDetails({ message }: { message: string }): React.ReactElement {
+  return (
+    <details className="group">
+      <summary className="cursor-pointer list-none text-[11px] text-muted-foreground/70 transition-colors hover:text-foreground">
+        Show details
+      </summary>
+      <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-background/40 p-2 font-mono text-[10px] text-muted-foreground">
+        {message.trim()}
+      </pre>
+    </details>
   );
 }
 
