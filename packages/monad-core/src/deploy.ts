@@ -2,6 +2,8 @@ import {
   type Abi,
   createPublicClient,
   createWalletClient,
+  encodeDeployData,
+  formatEther,
   http,
   type Hex,
 } from "viem";
@@ -54,6 +56,33 @@ export async function deployContract(
     chain,
     transport: http(net.rpcUrl),
   });
+
+  // Preflight gas check. Monad reserves the FULL gas limit × maxFeePerGas up
+  // front (not gas actually used), so a large contract can need more than a
+  // small balance even if the deploy would only spend a fraction. We fail
+  // here with exact numbers instead of letting the node return an opaque
+  // "insufficient balance". `estimateGas` doesn't require a funded account, so
+  // this is safe to run before we know the wallet can pay.
+  const data = encodeDeployData({
+    abi: opts.abi,
+    bytecode: opts.bytecode,
+    args: opts.args as never,
+  });
+  const [gas, fees, balance] = await Promise.all([
+    publicClient.estimateGas({ account, data }),
+    publicClient.estimateFeesPerGas(),
+    publicClient.getBalance({ address: account.address }),
+  ]);
+  const maxFeePerGas = fees.maxFeePerGas ?? 0n;
+  const required = gas * maxFeePerGas;
+  if (balance < required) {
+    const mon = (wei: bigint) => Number(formatEther(wei)).toFixed(4);
+    throw new Error(
+      `Insufficient balance for gas. Deploying this contract needs about ` +
+        `${mon(required)} MON, but ${account.address} has ${mon(balance)} MON ` +
+        `on ${net.name}. Add more test MON and try again.`,
+    );
+  }
 
   const txHash = await wallet.deployContract({
     abi: opts.abi,

@@ -536,12 +536,14 @@ function MonadErrorCard({
           Not enough gas to deploy
         </div>
         <p className="text-xs leading-relaxed text-muted-foreground">
-          Your app wallet has no MON to pay for this deployment.
-          {faucetUrl !== null
-            ? " Fund it with test MON, then deploy again."
-            : network === "local"
-              ? " The local devnet hasn’t funded it — switch to Testnet to use the faucet."
-              : ""}
+          {/needs about/i.test(message)
+            ? // Our preflight message already has the exact numbers — show it.
+              message.replace(/\s*0x[0-9a-fA-F]{40}\s*/, " your app wallet ")
+            : faucetUrl !== null
+              ? "Your app wallet doesn’t have enough MON to pay for this deployment. Fund it with test MON, then deploy again."
+              : network === "local"
+                ? "Your app wallet doesn’t have enough MON. The local devnet hasn’t funded it — switch to Testnet to use the faucet."
+                : "Your app wallet doesn’t have enough MON to pay for this deployment."}
         </p>
         {addr !== null ? <CopyAddress address={addr} /> : null}
         <div className="flex flex-wrap gap-2">
