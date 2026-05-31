@@ -10,6 +10,25 @@ export interface CompiledContract {
   readonly name: string;
   readonly abi: Abi;
   readonly bytecode: Hex;
+  /** Solidity source path from the artifact metadata, e.g. "src/Counter.sol". */
+  readonly sourcePath: string | null;
+}
+
+/**
+ * Whether an artifact is one of the user's own deployable contracts (under
+ * `src/`) vs a dependency, test, or script. Foundry compiles forge-std and
+ * test/script contracts into `out/` too, and many carry creation bytecode —
+ * we don't want them cluttering the deploy picker. `null` source (metadata
+ * disabled) is kept, since we can't tell.
+ */
+function isDeployableSource(sourcePath: string | null): boolean {
+  if (sourcePath === null) return true;
+  const p = sourcePath.replace(/^\.?\//, "");
+  if (p.startsWith("lib/") || p.includes("/lib/")) return false;
+  if (p.startsWith("test/") || p.includes("/test/")) return false;
+  if (p.startsWith("script/") || p.includes("/script/")) return false;
+  if (/\.t\.sol$/.test(p) || /\.s\.sol$/.test(p)) return false;
+  return true;
 }
 
 /** True if the Foundry `forge` binary is available on PATH. */
@@ -69,7 +88,9 @@ export async function listCompiledContracts(
     for (const file of files) {
       if (!file.endsWith(".json")) continue;
       const parsed = await readArtifactFile(join(outDir, dir, file));
-      if (parsed !== null) found.push(parsed);
+      if (parsed !== null && isDeployableSource(parsed.sourcePath)) {
+        found.push(parsed);
+      }
     }
   }
 
@@ -111,6 +132,7 @@ async function readArtifactFile(
   let json: {
     abi?: Abi;
     bytecode?: { object?: string };
+    metadata?: { settings?: { compilationTarget?: Record<string, string> } };
   };
   try {
     json = JSON.parse(raw);
@@ -125,5 +147,7 @@ async function readArtifactFile(
       .split("/")
       .pop()
       ?.replace(/\.json$/, "") ?? "Contract";
-  return { name, abi: json.abi ?? [], bytecode };
+  const target = json.metadata?.settings?.compilationTarget;
+  const sourcePath = target ? (Object.keys(target)[0] ?? null) : null;
+  return { name, abi: json.abi ?? [], bytecode, sourcePath };
 }

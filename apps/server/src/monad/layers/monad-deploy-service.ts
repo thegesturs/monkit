@@ -13,6 +13,7 @@ import {
   type NetworkId,
   parseDevServerUrl,
   readArtifact,
+  resolveContractsRoot,
   resolveFrontend,
   writeFrontendBindings,
 } from "@memoize/monad-core";
@@ -180,14 +181,17 @@ export const MonadDeployServiceLive = Layer.effect(
         // Fresh ABIs from a build; fall back to whatever's already in out/ if
         // the build fails (e.g. a transient compile error) so codegen still
         // updates addresses.
+        const contractsRoot = yield* tryPromise(() =>
+          resolveContractsRoot(root),
+        );
         const compiled = yield* tryPromise(async () => {
           if (!(await hasFoundry())) return [];
           try {
-            await compileProject(root);
+            await compileProject(contractsRoot);
           } catch {
             // fall through to whatever artifacts exist
           }
-          return listCompiledContracts(root);
+          return listCompiledContracts(contractsRoot);
         }).pipe(Effect.catchAll(() => Effect.succeed([] as never[])));
 
         const abiByName = new Map<string, CodegenContract["abi"]>();
@@ -250,12 +254,17 @@ export const MonadDeployServiceLive = Layer.effect(
     const compile = (projectId: string) =>
       Effect.gen(function* () {
         const root = yield* projectRoot(projectId);
+        const contractsRoot = yield* tryPromise(() =>
+          resolveContractsRoot(root),
+        );
         const foundryAvailable = yield* tryPromise(() => hasFoundry());
         if (!foundryAvailable) {
           return { foundryAvailable: false, contracts: [] };
         }
-        yield* tryPromise(() => compileProject(root));
-        const compiled = yield* tryPromise(() => listCompiledContracts(root));
+        yield* tryPromise(() => compileProject(contractsRoot));
+        const compiled = yield* tryPromise(() =>
+          listCompiledContracts(contractsRoot),
+        );
         const contracts: CompiledContractInfo[] = compiled.map((c) => {
           const ctor = c.abi.find(
             (entry) => (entry as { type?: string }).type === "constructor",
@@ -285,6 +294,9 @@ export const MonadDeployServiceLive = Layer.effect(
           catch: (c) => (c instanceof Error ? c : new Error(String(c))),
         });
         const root = yield* projectRoot(input.projectId);
+        const contractsRoot = yield* tryPromise(() =>
+          resolveContractsRoot(root),
+        );
 
         const foundryAvailable = yield* tryPromise(() => hasFoundry());
         if (!foundryAvailable) {
@@ -292,9 +304,9 @@ export const MonadDeployServiceLive = Layer.effect(
             new Error("Foundry (forge) is not installed or not on PATH."),
           );
         }
-        yield* tryPromise(() => compileProject(root));
+        yield* tryPromise(() => compileProject(contractsRoot));
         const artifact = yield* tryPromise(() =>
-          readArtifact(root, input.contractName),
+          readArtifact(contractsRoot, input.contractName),
         );
 
         // Coerce string args to the JS types viem expects per the ABI.
