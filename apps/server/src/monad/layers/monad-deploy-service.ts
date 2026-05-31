@@ -3,18 +3,24 @@ import keytar from "keytar";
 import { SqlClient } from "@effect/sql";
 import { Effect, Layer } from "effect";
 import {
+  classifyAbiFunctions,
   type CodegenContract,
+  coerceArgs,
   compileProject,
   deployContract,
   detectPackageManager,
+  findAbiFunction,
   getNetwork,
   hasFoundry,
   listCompiledContracts,
   type NetworkId,
   parseDevServerUrl,
   readArtifact,
+  readContractFn,
   resolveContracts,
   resolveFrontend,
+  stringifyContractResult,
+  writeContractFn,
   writeFrontendBindings,
 } from "@memoize/monad-core";
 
@@ -22,6 +28,10 @@ import {
   MonadDeployService,
   type CodegenResultInfo,
   type CompiledContractInfo,
+  type ContractFunctionsResult,
+  type ContractReadInput,
+  type ContractWriteInput,
+  type ContractWriteResult,
   type DeployRecordRow,
   type DevnetStatusInfo,
   type FrontendStatusInfo,
@@ -512,6 +522,136 @@ export const MonadDeployServiceLive = Layer.effect(
 
     const frontendStatus = () => Effect.sync(() => frontendStatusInfo());
 
+    /** The most-recent burner wallet's private key, from the OS keychain. */
+    const loadSignerKey = () =>
+      Effect.gen(function* () {
+        const wallets = yield* sql<{ address: string }>`
+          SELECT address FROM monad_wallets ORDER BY created_at DESC LIMIT 1
+        `;
+        const address = wallets[0]?.address;
+        if (address == null) {
+          return yield* Effect.fail(
+            new Error("No wallet found — create a burner wallet first."),
+          );
+        }
+        const pk = yield* tryPromise(() =>
+          keytar.getPassword(SERVICE_NAME, keychainAccountFor(address)),
+        );
+        if (pk == null) {
+          return yield* Effect.fail(
+            new Error(`No private key in keychain for ${address}`),
+          );
+        }
+        return pk as `0x${string}`;
+      });
+
+    /**
+     * The compiled ABI for a contract by name. We build first (best-effort) so
+     * a freshly-edited contract's ABI is current, then read the artifact.
+     */
+    const loadAbi = (projectId: string, contractName: string) =>
+      Effect.gen(function* () {
+        const root = yield* projectRoot(projectId);
+        const { foundryRoot, outDir } = yield* tryPromise(() =>
+          resolveContracts(root),
+        );
+        const available = yield* tryPromise(() => hasFoundry());
+        if (available) {
+          yield* tryPromise(() => compileProject(foundryRoot)).pipe(
+            Effect.catchAll(() => Effect.void),
+          );
+        }
+        const artifact = yield* tryPromise(() =>
+          readArtifact(outDir, contractName),
+        );
+        return artifact.abi;
+      });
+
+    const contractFunctions = (projectId: string, contractName: string) =>
+      Effect.gen(function* () {
+        const abi = yield* loadAbi(projectId, contractName);
+        return classifyAbiFunctions(abi) satisfies ContractFunctionsResult;
+      });
+
+    const contractRead = (input: ContractReadInput) =>
+      Effect.gen(function* () {
+        const networkId = yield* Effect.try({
+          try: () => asNetworkId(input.network),
+          catch: (c) => (c instanceof Error ? c : new Error(String(c))),
+        });
+        const abi = yield* loadAbi(input.projectId, input.contractName);
+        const fn = findAbiFunction(abi, input.functionName);
+        if (fn === null) {
+          return yield* Effect.fail(
+            new Error(`No function "${input.functionName}" on this contract.`),
+          );
+        }
+        const args = yield* Effect.try({
+          try: () => coerceArgs(fn, input.args),
+          catch: (c) =>
+            new Error(
+              `Invalid argument: ${c instanceof Error ? c.message : String(c)}`,
+            ),
+        });
+        const value = yield* tryPromise(() =>
+          readContractFn({
+            networkId,
+            address: input.address as `0x${string}`,
+            abi,
+            functionName: input.functionName,
+            args,
+          }),
+        );
+        return { result: stringifyContractResult(value) };
+      });
+
+    const contractWrite = (input: ContractWriteInput) =>
+      Effect.gen(function* () {
+        const networkId = yield* Effect.try({
+          try: () => asNetworkId(input.network),
+          catch: (c) => (c instanceof Error ? c : new Error(String(c))),
+        });
+        const abi = yield* loadAbi(input.projectId, input.contractName);
+        const fn = findAbiFunction(abi, input.functionName);
+        if (fn === null) {
+          return yield* Effect.fail(
+            new Error(`No function "${input.functionName}" on this contract.`),
+          );
+        }
+        const args = yield* Effect.try({
+          try: () => coerceArgs(fn, input.args),
+          catch: (c) =>
+            new Error(
+              `Invalid argument: ${c instanceof Error ? c.message : String(c)}`,
+            ),
+        });
+        const value = yield* Effect.try({
+          try: () =>
+            input.value != null && input.value !== ""
+              ? BigInt(input.value)
+              : undefined,
+          catch: () => new Error(`Invalid value: ${input.value}`),
+        });
+        const pk = yield* loadSignerKey();
+        const result = yield* tryPromise(() =>
+          writeContractFn({
+            networkId,
+            privateKey: pk,
+            address: input.address as `0x${string}`,
+            abi,
+            functionName: input.functionName,
+            args,
+            value,
+          }),
+        );
+        return {
+          txHash: result.txHash,
+          blockNumber:
+            result.blockNumber === null ? null : Number(result.blockNumber),
+          status: result.status,
+        } satisfies ContractWriteResult;
+      });
+
     return {
       compile,
       deploy,
@@ -523,6 +663,9 @@ export const MonadDeployServiceLive = Layer.effect(
       frontendStart,
       frontendStop,
       frontendStatus,
+      contractFunctions,
+      contractRead,
+      contractWrite,
     };
   }),
 );

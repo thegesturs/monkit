@@ -1,5 +1,18 @@
 # Feature: Contract interaction
 
+## Status
+
+**Shipped (UI):** the `ContractsPanel` lists a project's deployed contracts (from deploy history),
+resolves the selected contract's ABI from its compiled artifact, and renders ABI-driven **Read** and
+**Write** sections. Reads run free against the deploy's network; zero-arg reads auto-display. Writes
+`simulateContract` first (so reverts surface before gas), sign with the most recent burner wallet, wait
+for the receipt, and link the tx on the explorer. Backed by `monad.contract.{functions,read,write}` RPCs
+and `monad-core/interact.ts`.
+
+**Deferred:** the **Events** subscribe section, the explicit "Use deployed address" picker (the deployed
+list serves this for now), and the `monad_call` / `monad_read` / `monad_estimate_gas` **MCP tools** (Phase
+5 agent surface).
+
 ## Why
 
 After deploy, the user (and the AI) need to call functions and read state. Doing this without UI means copy-pasting calldata into a browser explorer or writing forge scripts. We render an ABI-driven panel and expose MCP tools.

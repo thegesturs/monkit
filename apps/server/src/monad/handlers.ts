@@ -232,6 +232,55 @@ const FrontendStatus = MemoizeRpcs.toLayerHandler("monad.frontend.status", () =>
   }),
 );
 
+// ===== Phase 5 Contract interaction handlers =====
+const ContractFunctions = MemoizeRpcs.toLayerHandler(
+  "monad.contract.functions",
+  (payload) =>
+    Effect.gen(function* () {
+      const svc = yield* MonadDeployService;
+      return yield* svc
+        .contractFunctions(payload.projectId, payload.contractName)
+        .pipe(Effect.mapError(toMonadRpcError));
+    }),
+);
+
+const ContractRead = MemoizeRpcs.toLayerHandler(
+  "monad.contract.read",
+  (payload) =>
+    Effect.gen(function* () {
+      const svc = yield* MonadDeployService;
+      return yield* svc
+        .contractRead({
+          projectId: payload.projectId,
+          contractName: payload.contractName,
+          address: payload.address,
+          network: payload.network,
+          functionName: payload.functionName,
+          args: payload.args,
+        })
+        .pipe(Effect.mapError(toMonadRpcError));
+    }),
+);
+
+const ContractWrite = MemoizeRpcs.toLayerHandler(
+  "monad.contract.write",
+  (payload) =>
+    Effect.gen(function* () {
+      const svc = yield* MonadDeployService;
+      return yield* svc
+        .contractWrite({
+          projectId: payload.projectId,
+          contractName: payload.contractName,
+          address: payload.address,
+          network: payload.network,
+          functionName: payload.functionName,
+          args: payload.args,
+          value: payload.value,
+        })
+        .pipe(Effect.mapError(toMonadRpcError));
+    }),
+);
+
 export const MonadHandlersLayer = Layer.mergeAll(
   GetBlockNumber,
   GetActiveNetwork,
@@ -255,4 +304,8 @@ export const MonadHandlersLayer = Layer.mergeAll(
   FrontendStart,
   FrontendStop,
   FrontendStatus,
+  // Phase 5
+  ContractFunctions,
+  ContractRead,
+  ContractWrite,
 );
