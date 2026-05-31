@@ -2,8 +2,10 @@ import { Effect } from "effect";
 import {
   CheckCircle2,
   ExternalLink,
+  FileCode2,
   Globe,
   Hammer,
+  Loader2,
   Play,
   RefreshCw,
   Rocket,
@@ -179,9 +181,8 @@ export function DeployPanel({
     }
   };
 
-  const runCompile = async () => {
+  const runCompile = useCallback(async () => {
     setCompile({ kind: "compiling" });
-    setSelected(null);
     setArgs({});
     try {
       const client = await getRpcClient();
@@ -193,15 +194,26 @@ export function DeployPanel({
         return;
       }
       setCompile({ kind: "ready", contracts: res.contracts });
-      const only = res.contracts.length === 1 ? res.contracts[0] : null;
-      if (only) setSelected(only.name);
+      // Auto-select so the Deploy button is immediately actionable; keep the
+      // current pick if it still exists after a recompile.
+      setSelected((prev) =>
+        prev !== null && res.contracts.some((c) => c.name === prev)
+          ? prev
+          : (res.contracts[0]?.name ?? null),
+      );
     } catch (err) {
       setCompile({
         kind: "error",
         message: err instanceof Error ? err.message : String(err),
       });
     }
-  };
+  }, [projectId]);
+
+  // Auto-compile when the panel opens (and when switching projects) so the
+  // user sees their contracts without having to discover the Compile button.
+  useEffect(() => {
+    void runCompile();
+  }, [runCompile]);
 
   const startDevnet = async () => {
     setDevnetBusy(true);
@@ -353,10 +365,16 @@ export function DeployPanel({
           ) : compile.kind === "ready" ? (
             compile.contracts.length === 0 ? (
               <p className="text-xs text-muted-foreground">
-                No deployable contracts found in <code>out/</code>.
+                No deployable contract found in <code>contracts/src/</code>.
+                Write a Solidity contract and it’ll show up here.
               </p>
             ) : (
               <>
+                <p className="text-[11px] text-muted-foreground">
+                  {compile.contracts.length === 1
+                    ? "Found 1 contract — pick a network and deploy."
+                    : `Found ${compile.contracts.length} contracts — select one to deploy.`}
+                </p>
                 <div className="flex flex-wrap gap-1.5">
                   {compile.contracts.map((c) => (
                     <button
@@ -365,10 +383,11 @@ export function DeployPanel({
                       onClick={() => setSelected(c.name)}
                       className={
                         c.name === selected
-                          ? "rounded-md bg-primary px-2.5 py-1 text-[11px] font-medium text-primary-foreground"
-                          : "rounded-md border border-border px-2.5 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                          ? "flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-[11px] font-medium text-primary-foreground"
+                          : "flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                       }
                     >
+                      <FileCode2 className="size-3" />
                       {c.name}
                     </button>
                   ))}
@@ -401,9 +420,10 @@ export function DeployPanel({
               </>
             )
           ) : (
-            <p className="text-xs text-muted-foreground">
-              Compile the project to pick a contract to deploy.
-            </p>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="size-3.5 animate-spin" />
+              Looking for contracts…
+            </div>
           )}
         </div>
 
@@ -438,14 +458,15 @@ export function DeployPanel({
               <DeployRow key={d.id} deploy={d} />
             ))}
           </div>
-        ) : compile.kind === "idle" ? (
+        ) : compile.kind === "ready" && compile.contracts.length === 0 ? (
           <Empty className="py-8">
             <EmptyMedia variant="icon">
-              <Rocket />
+              <FileCode2 />
             </EmptyMedia>
-            <EmptyTitle>No deploys yet</EmptyTitle>
+            <EmptyTitle>No contracts yet</EmptyTitle>
             <EmptyDescription>
-              Compile your Foundry contracts, then deploy to the active network.
+              Add a Solidity contract under <code>contracts/src/</code> and it
+              will appear here, ready to deploy.
             </EmptyDescription>
           </Empty>
         ) : null}
