@@ -22,13 +22,20 @@ import {
   IndexStatusStreamRpc,
   IndexSymbolLookupRpc,
 } from "./code-index.ts";
-import { FsReadFileRpc, FsTreeRpc, FsWriteFileRpc } from "./fs.ts";
+import {
+  FsReadExternalFileRpc,
+  FsReadFileRpc,
+  FsTreeRpc,
+  FsWriteExternalFileRpc,
+  FsWriteFileRpc,
+} from "./fs.ts";
 import {
   GitChangesRpc,
   GitCommitRpc,
   GitDiffRpc,
   GitFixFailingChecksRpc,
   GitHeadChangedRpc,
+  GitInitRpc,
   GitLogRpc,
   GitOriginRpc,
   GitPrDetailsRpc,
@@ -99,7 +106,11 @@ import {
 import { SkillListRpc, SkillStreamRpc } from "./skill.ts";
 import {
   WorkspaceAddRpc,
+  WorkspaceCloneRepoRpc,
+  WorkspaceCreateProjectRpc,
   WorkspaceGetSelectedRpc,
+  WorkspaceGhAuthStatusRpc,
+  WorkspaceListGithubReposRpc,
   WorkspaceListRpc,
   WorkspacePickFolderRpc,
   WorkspaceRemoveRpc,
@@ -148,6 +159,10 @@ export const MemoizeRpcs = RpcGroup.make(
   WorkspaceSetSelectedRpc,
   WorkspaceSearchFilesRpc,
   WorkspaceScaffoldTemplateRpc,
+  WorkspaceCloneRepoRpc,
+  WorkspaceCreateProjectRpc,
+  WorkspaceListGithubReposRpc,
+  WorkspaceGhAuthStatusRpc,
   PtyOpenRpc,
   PtyWriteRpc,
   PtyResizeRpc,
@@ -163,10 +178,13 @@ export const MemoizeRpcs = RpcGroup.make(
   GitDiffRpc,
   GitCommitRpc,
   GitPushRpc,
+  GitInitRpc,
   GitFixFailingChecksRpc,
   FsTreeRpc,
   FsReadFileRpc,
   FsWriteFileRpc,
+  FsReadExternalFileRpc,
+  FsWriteExternalFileRpc,
   AgentAvailabilityRpc,
   AgentSetCredentialRpc,
   AgentStartRpc,

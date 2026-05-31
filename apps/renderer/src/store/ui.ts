@@ -52,18 +52,43 @@ export type RightTab =
  */
 export type FileView = "edit" | "diff";
 
-export type OpenFile = {
-  readonly folderId: FolderId;
-  readonly path: string;
-  readonly name: string;
-  /**
-   * Worktree the file lives in. Persisted on the OpenFile so a save still
-   * targets the right tree even if the user switches selected sessions
-   * while the file is open. `null` means main checkout.
-   */
-  readonly worktreeId: WorktreeId | null;
-  readonly view: FileView;
-};
+/**
+ * Discriminated by `kind`. `text` is the project-root-relative path the file
+ * editor reads via `fs.readFile`; `image` is a raw URL the renderer renders
+ * inline (currently used for `memoize://attachments/<id>` so screenshots
+ * stay inside the app instead of bouncing to the OS handler).
+ */
+export type OpenFile =
+  | {
+      readonly kind: "text";
+      readonly folderId: FolderId;
+      readonly path: string;
+      readonly name: string;
+      /**
+       * Worktree the file lives in. Persisted on the OpenFile so a save
+       * still targets the right tree even if the user switches selected
+       * sessions while the file is open. `null` means main checkout.
+       */
+      readonly worktreeId: WorktreeId | null;
+      readonly view: FileView;
+    }
+  | {
+      readonly kind: "image";
+      readonly src: string;
+      readonly name: string;
+    }
+  | {
+      /**
+       * A file outside any project folder (e.g. a plan or markdown file the
+       * agent wrote elsewhere on disk). Read/written by absolute path via the
+       * `fs.*ExternalFile` RPCs, which deliberately skip the workspace
+       * sandbox. Edit-only — there's no git/folder context for a diff.
+       */
+      readonly kind: "external";
+      readonly absPath: string;
+      readonly name: string;
+      readonly view: FileView;
+    };
 
 type UiState = {
   readonly view: View;
@@ -82,7 +107,14 @@ type UiState = {
   readonly activeRightTab: RightTab;
   readonly setActiveMainTab: (tab: MainTab) => void;
   readonly openFileInTab: (
-    file: Omit<OpenFile, "view"> & { view?: FileView },
+    file:
+      | (Omit<Extract<OpenFile, { kind: "text" }>, "view"> & {
+          view?: FileView;
+        })
+      | (Omit<Extract<OpenFile, { kind: "external" }>, "view"> & {
+          view?: FileView;
+        })
+      | Extract<OpenFile, { kind: "image" }>,
   ) => void;
   readonly setOpenFileView: (view: FileView) => void;
   readonly closeFileTab: () => void;
@@ -109,12 +141,18 @@ export const useUiStore = create<UiState>((set) => ({
   setActiveMainTab: (tab) => set({ activeMainTab: tab }),
   openFileInTab: (file) =>
     set({
-      openFile: { ...file, view: file.view ?? "edit" },
+      openFile:
+        file.kind === "image"
+          ? file
+          : { ...file, view: file.view ?? "edit" },
       activeMainTab: "file",
       fileDirty: false,
     }),
   setOpenFileView: (view) =>
-    set((s) => (s.openFile === null ? s : { openFile: { ...s.openFile, view } })),
+    set((s) => {
+      if (s.openFile === null || s.openFile.kind !== "text") return s;
+      return { openFile: { ...s.openFile, view } };
+    }),
   closeFileTab: () =>
     set({ openFile: null, activeMainTab: "chat", fileDirty: false }),
   setFileDirty: (dirty) => set({ fileDirty: dirty }),
