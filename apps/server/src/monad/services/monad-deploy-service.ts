@@ -41,6 +41,19 @@ export interface DeployContractInput {
   readonly network: string;
 }
 
+export interface CodegenResultInfo {
+  readonly written: readonly string[];
+  readonly skipped: readonly string[];
+  readonly frontendMissing: boolean;
+}
+
+export interface FrontendStatusInfo {
+  readonly running: boolean;
+  readonly url: string | null;
+  readonly pm: string | null;
+  readonly projectId: string | null;
+}
+
 export interface MonadDeployServiceShape {
   /** Compile the project's Foundry contracts and list what's deployable. */
   readonly compile: (projectId: string) => Effect.Effect<CompileResult, Error>;
@@ -58,6 +71,18 @@ export interface MonadDeployServiceShape {
   readonly devnetStart: () => Effect.Effect<DevnetStatusInfo, Error>;
   readonly devnetStop: () => Effect.Effect<void, Error>;
   readonly devnetStatus: () => Effect.Effect<DevnetStatusInfo, Error>;
+
+  /** Rewrite the frontend bindings from deploy history + compiled ABIs. */
+  readonly regenerateBindings: (
+    projectId: string,
+  ) => Effect.Effect<CodegenResultInfo, Error>;
+
+  /** Start / stop / inspect the project's frontend dev server. */
+  readonly frontendStart: (
+    projectId: string,
+  ) => Effect.Effect<FrontendStatusInfo, Error>;
+  readonly frontendStop: () => Effect.Effect<FrontendStatusInfo, Error>;
+  readonly frontendStatus: () => Effect.Effect<FrontendStatusInfo, Error>;
 }
 
 export class MonadDeployService extends Context.Tag(

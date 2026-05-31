@@ -105,6 +105,12 @@ type UiState = {
   readonly rightSidebarOpen: boolean;
   readonly isFullScreen: boolean;
   readonly activeRightTab: RightTab;
+  /**
+   * A URL the Browser pane should navigate to on its next render, set by
+   * "Open in app browser" affordances (e.g. the Monad frontend runner). The
+   * BrowserPane consumes and clears it. `null` when there's nothing pending.
+   */
+  readonly pendingBrowserUrl: string | null;
   readonly setActiveMainTab: (tab: MainTab) => void;
   readonly openFileInTab: (
     file:
@@ -123,6 +129,9 @@ type UiState = {
   readonly setRightSidebarOpen: (open: boolean) => void;
   readonly setFullScreen: (full: boolean) => void;
   readonly setActiveRightTab: (tab: RightTab) => void;
+  /** Reveal the right pane, switch to the Browser tab, and queue `url`. */
+  readonly openInBrowser: (url: string) => void;
+  readonly clearPendingBrowserUrl: () => void;
 };
 
 export const useUiStore = create<UiState>((set) => ({
@@ -138,6 +147,7 @@ export const useUiStore = create<UiState>((set) => ({
   rightSidebarOpen: true,
   isFullScreen: false,
   activeRightTab: "files",
+  pendingBrowserUrl: null,
   setActiveMainTab: (tab) => set({ activeMainTab: tab }),
   openFileInTab: (file) =>
     set({
@@ -160,4 +170,11 @@ export const useUiStore = create<UiState>((set) => ({
   setRightSidebarOpen: (open) => set({ rightSidebarOpen: open }),
   setFullScreen: (full) => set({ isFullScreen: full }),
   setActiveRightTab: (tab) => set({ activeRightTab: tab }),
+  openInBrowser: (url) =>
+    set({
+      pendingBrowserUrl: url,
+      activeRightTab: "browser",
+      rightSidebarOpen: true,
+    }),
+  clearPendingBrowserUrl: () => set({ pendingBrowserUrl: null }),
 }));

@@ -118,7 +118,9 @@ export function FileTree({ folderId }: { folderId: FolderId }) {
 
   const openFileInTab = useUiStore((s) => s.openFileInTab);
   const setActiveMainTab = useUiStore((s) => s.setActiveMainTab);
-  const activePath = useUiStore((s) => s.openFile?.path ?? null);
+  const activePath = useUiStore((s) =>
+    s.openFile?.kind === "text" ? s.openFile.path : null,
+  );
 
   const onActivate = useCallback(
     (entry: FsEntry) => {
