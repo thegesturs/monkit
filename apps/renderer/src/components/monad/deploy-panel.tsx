@@ -1,6 +1,8 @@
 import { Effect } from "effect";
 import {
+  Check,
   CheckCircle2,
+  Copy,
   ExternalLink,
   FileCode2,
   Fuel,
@@ -528,28 +530,36 @@ function MonadErrorCard({
     const faucetUrl = NETWORK_META[network].faucetUrl;
     const addr = extractAddress(message);
     return (
-      <div className="flex flex-col gap-2 rounded-lg border border-warning/40 bg-warning/10 p-3">
-        <div className="flex items-center gap-1.5 text-xs font-medium text-warning-foreground">
-          <Fuel className="size-3.5 shrink-0" />
+      <div className="flex flex-col gap-3 rounded-lg border border-warning/30 bg-warning/[0.06] p-3.5">
+        <div className="flex items-center gap-2 font-medium text-sm text-foreground">
+          <Fuel className="size-4 shrink-0 text-warning" />
           Not enough gas to deploy
         </div>
-        <p className="text-[11px] leading-relaxed text-muted-foreground">
-          Your app wallet{addr ? ` (${truncateAddress(addr)})` : ""} has no MON
-          to pay for this deployment
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          Your app wallet has no MON to pay for this deployment.
           {faucetUrl !== null
-            ? ". Grab some test MON, then deploy again."
+            ? " Fund it with test MON, then deploy again."
             : network === "local"
-              ? ". The local devnet hasn’t funded it — switch to Testnet and use the faucet."
-              : "."}
+              ? " The local devnet hasn’t funded it — switch to Testnet to use the faucet."
+              : ""}
         </p>
-        <div className="flex flex-wrap gap-1.5">
+        {addr !== null ? <CopyAddress address={addr} /> : null}
+        <div className="flex flex-wrap gap-2">
           {faucetUrl !== null ? (
-            <Button size="xs" onClick={() => openExternal(faucetUrl)}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => openExternal(faucetUrl)}
+            >
               <ExternalLink />
               Get test MON
             </Button>
           ) : network === "local" ? (
-            <Button size="xs" onClick={() => onSwitchNetwork("testnet")}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onSwitchNetwork("testnet")}
+            >
               Switch to Testnet
             </Button>
           ) : null}
@@ -588,6 +598,52 @@ function MonadErrorCard({
       </p>
       <ErrorDetails message={message} />
     </div>
+  );
+}
+
+/** A labelled, click-to-copy wallet address chip. */
+function CopyAddress({ address }: { address: string }): React.ReactElement {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard?.writeText(address).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      },
+      () => {
+        /* clipboard unavailable — no-op */
+      },
+    );
+  };
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      title="Copy full address"
+      className="group flex w-full items-center justify-between gap-2 rounded-md border border-border bg-background/60 px-2.5 py-2 text-left transition-colors hover:bg-muted"
+    >
+      <span className="flex min-w-0 flex-col">
+        <span className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
+          App wallet
+        </span>
+        <span className="truncate font-mono text-xs text-foreground">
+          {address}
+        </span>
+      </span>
+      <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground transition-colors group-hover:text-foreground">
+        {copied ? (
+          <>
+            <Check className="size-3.5 text-success" />
+            Copied
+          </>
+        ) : (
+          <>
+            <Copy className="size-3.5" />
+            Copy
+          </>
+        )}
+      </span>
+    </button>
   );
 }
 
