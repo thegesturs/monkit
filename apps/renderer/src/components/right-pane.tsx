@@ -187,7 +187,7 @@ export function RightPane() {
                     <DeployPanel projectId={selected.id} />
                   </div>
                   <div hidden={tab !== "monad-contracts"} className="flex min-h-0 flex-1 flex-col">
-                    <ContractsPanel />
+                    <ContractsPanel projectId={selected.id} />
                   </div>
                   <div hidden={tab !== "monad-explorer"} className="flex min-h-0 flex-1 flex-col">
                     <ExplorerPanel />

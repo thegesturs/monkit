@@ -146,6 +146,10 @@ import {
   FrontendStartRpc,
   FrontendStopRpc,
   FrontendStatusRpc,
+  // Phase 5
+  ContractFunctionsRpc,
+  ContractReadRpc,
+  ContractWriteRpc,
 } from "./monad.ts";
 
 /**
@@ -280,6 +284,10 @@ export const MemoizeRpcs = RpcGroup.make(
   FrontendStartRpc,
   FrontendStopRpc,
   FrontendStatusRpc,
+  // Phase 5 contract interaction
+  ContractFunctionsRpc,
+  ContractReadRpc,
+  ContractWriteRpc,
 );
 export type MemoizeRpcs = typeof MemoizeRpcs;
 

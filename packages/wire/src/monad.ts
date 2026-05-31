@@ -240,3 +240,75 @@ export const FrontendStatusRpc = Rpc.make("monad.frontend.status", {
   success: FrontendStatusSchema,
   error: MonadRpcError,
 });
+
+// ===== Phase 5: Contract interaction =====
+
+export class AbiParam extends Schema.Class<AbiParam>("AbiParam")({
+  name: Schema.String,
+  type: Schema.String,
+}) {}
+
+/** A callable ABI function, split read vs write by `stateMutability`. */
+export class ContractFunctionInfo extends Schema.Class<ContractFunctionInfo>(
+  "ContractFunctionInfo",
+)({
+  name: Schema.String,
+  /** "view" | "pure" | "nonpayable" | "payable" */
+  stateMutability: Schema.String,
+  inputs: Schema.Array(AbiParam),
+  outputs: Schema.Array(AbiParam),
+}) {}
+
+/**
+ * The deployed contract's ABI, split into free reads (view/pure) and
+ * state-changing writes. Resolved from the project's compiled artifacts by
+ * contract name.
+ */
+export const ContractFunctionsRpc = Rpc.make("monad.contract.functions", {
+  payload: Schema.Struct({
+    projectId: Schema.String,
+    contractName: Schema.String,
+  }),
+  success: Schema.Struct({
+    reads: Schema.Array(ContractFunctionInfo),
+    writes: Schema.Array(ContractFunctionInfo),
+  }),
+  error: MonadRpcError,
+});
+
+/** Call a view/pure function. `result` is the JSON-stringified return value. */
+export const ContractReadRpc = Rpc.make("monad.contract.read", {
+  payload: Schema.Struct({
+    projectId: Schema.String,
+    contractName: Schema.String,
+    address: Schema.String,
+    network: Schema.String,
+    functionName: Schema.String,
+    args: Schema.Array(Schema.Unknown),
+  }),
+  success: Schema.Struct({ result: Schema.String }),
+  error: MonadRpcError,
+});
+
+/**
+ * Send a state-changing call. Simulated first (so reverts surface before gas),
+ * signed with the most recent burner wallet. `value` is wei as a string (for
+ * payable functions); omit otherwise.
+ */
+export const ContractWriteRpc = Rpc.make("monad.contract.write", {
+  payload: Schema.Struct({
+    projectId: Schema.String,
+    contractName: Schema.String,
+    address: Schema.String,
+    network: Schema.String,
+    functionName: Schema.String,
+    args: Schema.Array(Schema.Unknown),
+    value: Schema.optional(Schema.String),
+  }),
+  success: Schema.Struct({
+    txHash: Schema.String,
+    blockNumber: Schema.NullOr(Schema.Number),
+    status: Schema.String,
+  }),
+  error: MonadRpcError,
+});

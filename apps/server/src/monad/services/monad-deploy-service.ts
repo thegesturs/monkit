@@ -54,6 +54,43 @@ export interface FrontendStatusInfo {
   readonly projectId: string | null;
 }
 
+export interface AbiParamInfo {
+  readonly name: string;
+  readonly type: string;
+}
+
+export interface ContractFunctionInfo {
+  readonly name: string;
+  readonly stateMutability: string;
+  readonly inputs: readonly AbiParamInfo[];
+  readonly outputs: readonly AbiParamInfo[];
+}
+
+export interface ContractFunctionsResult {
+  readonly reads: readonly ContractFunctionInfo[];
+  readonly writes: readonly ContractFunctionInfo[];
+}
+
+export interface ContractReadInput {
+  readonly projectId: string;
+  readonly contractName: string;
+  readonly address: string;
+  readonly network: string;
+  readonly functionName: string;
+  readonly args: readonly unknown[];
+}
+
+export interface ContractWriteInput extends ContractReadInput {
+  /** Native value in wei (string) for payable functions. */
+  readonly value?: string;
+}
+
+export interface ContractWriteResult {
+  readonly txHash: string;
+  readonly blockNumber: number | null;
+  readonly status: string;
+}
+
 export interface MonadDeployServiceShape {
   /** Compile the project's Foundry contracts and list what's deployable. */
   readonly compile: (projectId: string) => Effect.Effect<CompileResult, Error>;
@@ -83,6 +120,22 @@ export interface MonadDeployServiceShape {
   ) => Effect.Effect<FrontendStatusInfo, Error>;
   readonly frontendStop: () => Effect.Effect<FrontendStatusInfo, Error>;
   readonly frontendStatus: () => Effect.Effect<FrontendStatusInfo, Error>;
+
+  /** ABI functions (read vs write) for a deployed contract, by name. */
+  readonly contractFunctions: (
+    projectId: string,
+    contractName: string,
+  ) => Effect.Effect<ContractFunctionsResult, Error>;
+
+  /** Call a view/pure function; returns the JSON-stringified result. */
+  readonly contractRead: (
+    input: ContractReadInput,
+  ) => Effect.Effect<{ readonly result: string }, Error>;
+
+  /** Simulate + send a state-changing call, signed with the burner wallet. */
+  readonly contractWrite: (
+    input: ContractWriteInput,
+  ) => Effect.Effect<ContractWriteResult, Error>;
 }
 
 export class MonadDeployService extends Context.Tag(

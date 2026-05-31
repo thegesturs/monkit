@@ -15,6 +15,7 @@ export * from "./wallet.js";
 export * from "./devnet.js";
 export * from "./compile.js";
 export * from "./deploy.js";
+export * from "./interact.js";
 export * from "./codegen.js";
 export * from "./config.js";
 export * from "./frontend.js";
