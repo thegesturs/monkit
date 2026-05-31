@@ -61,13 +61,14 @@ export async function compileProject(projectRoot: string): Promise<void> {
 }
 
 /**
- * List deployable contracts found in `out/` after a build — i.e. artifacts
- * that carry non-empty creation bytecode (skips interfaces/abstracts/libs).
+ * List deployable contracts found in the Foundry artifact dir after a build —
+ * artifacts that carry non-empty creation bytecode and live under the
+ * project's own `src/` (skips forge-std, tests, scripts, interfaces/libs).
+ * `outDir` is the absolute artifact dir (see `resolveContracts` in config.ts).
  */
 export async function listCompiledContracts(
-  projectRoot: string,
+  outDir: string,
 ): Promise<readonly CompiledContract[]> {
-  const outDir = join(projectRoot, "out");
   const found: CompiledContract[] = [];
 
   let entries: string[];
@@ -100,17 +101,15 @@ export async function listCompiledContracts(
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** Read + parse a single Foundry artifact for a named contract. */
+/**
+ * Read + parse a single Foundry artifact for a named contract. `outDir` is the
+ * absolute artifact dir (see `resolveContracts` in config.ts).
+ */
 export async function readArtifact(
-  projectRoot: string,
+  outDir: string,
   contractName: string,
 ): Promise<CompiledContract> {
-  const path = join(
-    projectRoot,
-    "out",
-    `${contractName}.sol`,
-    `${contractName}.json`,
-  );
+  const path = join(outDir, `${contractName}.sol`, `${contractName}.json`);
   const parsed = await readArtifactFile(path);
   if (parsed === null) {
     throw new Error(
