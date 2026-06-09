@@ -65,7 +65,7 @@ protocol.registerSchemesAsPrivileged([
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL?.trim() || "";
 const isDevelopment = Boolean(DEV_SERVER_URL);
 
-const APP_NAME = isDevelopment ? "memoize Alpha (Dev)" : "memoize Alpha";
+const APP_NAME = isDevelopment ? "monkit Beta (Dev)" : "monkit Beta";
 
 app.setName(APP_NAME);
 
@@ -435,16 +435,16 @@ ipcMain.on("menu:setAccelerators", (_event, payload: unknown) => {
 void app.whenReady().then(() => {
   registerMemoizeProtocol();
 
-  // Populate the native About panel so "About memoize" shows the current
+  // Populate the native About panel so "About monkit" shows the current
   // version + copyright. Without this, Electron's default panel only shows
   // the app name. macOS reads these once at panel-open time, so it's safe
   // to call once on startup.
   app.setAboutPanelOptions({
-    applicationName: "memoize Alpha",
+    applicationName: "monkit Beta",
     applicationVersion: app.getVersion(),
     version: app.getVersion(),
     copyright: "© Swaraj Bachu",
-    website: "https://github.com/swarajbachu/memoize",
+    website: "https://github.com/thegesturs/monkit",
   });
 
   // Rebuild the menu whenever the updater status changes so the

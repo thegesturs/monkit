@@ -1,5 +1,5 @@
 appId: app.memoize.desktop
-productName: memoize Alpha
+productName: monkit Beta
 copyright: © ${author}
 
 # Output the .dmg + latest-mac.yml + blockmap to repo-root/dist so all
@@ -73,8 +73,8 @@ mac:
   entitlementsInherit: build/entitlements.mac.plist
   icon: build/icon.png
   extendInfo:
-    NSCameraUsageDescription: memoize does not use the camera.
-    NSMicrophoneUsageDescription: memoize does not use the microphone.
+    NSCameraUsageDescription: monkit does not use the camera.
+    NSMicrophoneUsageDescription: monkit does not use the microphone.
 
 dmg:
   writeUpdateInfo: true
@@ -97,6 +97,6 @@ dmg:
 # go live immediately with no manual promotion step.
 publish:
   provider: github
-  owner: swarajbachu
-  repo: memoize
+  owner: thegesturs
+  repo: monkit
   releaseType: draft

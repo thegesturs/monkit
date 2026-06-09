@@ -375,7 +375,7 @@ function WorktreeSection({
         <Card>
           {sorted.length === 0 ? (
             <p className="px-4 py-8 text-center text-xs text-muted-foreground">
-              No worktrees yet. Memoize creates one for you when you start a
+              No worktrees yet. Monkit creates one for you when you start a
               new chat.
             </p>
           ) : (

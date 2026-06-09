@@ -1,9 +1,20 @@
 # Changelog
 
-All notable changes to memoize will be documented in this file.
+All notable changes to monkit will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.1.0] — monkit Beta
+
+First public beta under the **monkit** name.
+
+### Changed
+- **Rebranded to "monkit Beta".** Every user-facing surface now reads "monkit": the dock title, native About panel, macOS app menu, in-app top-bar brand, onboarding flow, update banners, and credential/settings copy. The GitHub repository and release target moved to `thegesturs/monkit`.
+- Reset the app version line to `0.1.0` to start the beta series.
+
+### Notes
+- Internal identifiers are intentionally unchanged so existing local installs keep their data and auto-update wiring: the bundle id (`app.memoize.desktop`), the `memoize://` URL scheme, the keychain service name, on-disk `~/.memoize/` paths, and the `@memoize/*` workspace package names all stay as-is. Only the display brand changed.
 
 ## [0.3.1]
 
