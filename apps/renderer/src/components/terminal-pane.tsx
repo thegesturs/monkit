@@ -132,6 +132,7 @@ export function TerminalPane() {
               folderId={ctx.folderId}
               cwd={inst.cwd}
               instanceId={inst.id}
+              command={inst.command}
             />
           </div>
         ))}
@@ -234,10 +235,12 @@ function PtyTerminal({
   folderId,
   cwd,
   instanceId,
+  command,
 }: {
   folderId: FolderId;
   cwd: string;
   instanceId: string;
+  command?: { readonly cmd: string; readonly args: ReadonlyArray<string> };
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -300,6 +303,9 @@ function PtyTerminal({
             cwd,
             cols: term.cols,
             rows: term.rows,
+            ...(command !== undefined
+              ? { command: { cmd: command.cmd, args: [...command.args] } }
+              : {}),
           }),
         );
         if (cancelled) {

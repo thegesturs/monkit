@@ -281,6 +281,67 @@ const ContractWrite = MemoizeRpcs.toLayerHandler(
     }),
 );
 
+const CloudDeploy = MemoizeRpcs.toLayerHandler("monad.cloudDeploy", (payload) =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const svc = yield* MonadDeployService;
+      return svc
+        .cloudDeploy({
+          projectId: payload.projectId,
+          contractName: payload.contractName,
+          constructorArgs: payload.constructorArgs,
+          stages: payload.stages,
+        })
+        .pipe(
+          Stream.tapError((e) => Effect.logError("cloudDeploy failed", e)),
+          Stream.mapError(toMonadRpcError),
+        );
+    }),
+  ),
+);
+
+const CloudStatus = MemoizeRpcs.toLayerHandler("monad.cloud.status", () =>
+  Effect.gen(function* () {
+    const svc = yield* MonadDeployService;
+    return yield* svc.cloudStatus().pipe(Effect.mapError(toMonadRpcError));
+  }),
+);
+
+const CloudConnectConvex = MemoizeRpcs.toLayerHandler(
+  "monad.cloud.connectConvex",
+  (payload) =>
+    Stream.unwrap(
+      Effect.gen(function* () {
+        const svc = yield* MonadDeployService;
+        return svc
+          .connectConvex(payload.projectId)
+          .pipe(Stream.mapError(toMonadRpcError));
+      }),
+    ),
+);
+
+const CloudConnectVercel = MemoizeRpcs.toLayerHandler(
+  "monad.cloud.connectVercel",
+  () =>
+    Stream.unwrap(
+      Effect.gen(function* () {
+        const svc = yield* MonadDeployService;
+        return svc.connectVercel().pipe(Stream.mapError(toMonadRpcError));
+      }),
+    ),
+);
+
+const PublishedUrl = MemoizeRpcs.toLayerHandler(
+  "monad.publishedUrl",
+  (payload) =>
+    Effect.gen(function* () {
+      const svc = yield* MonadDeployService;
+      return yield* svc
+        .publishedUrl(payload.projectId)
+        .pipe(Effect.mapError(toMonadRpcError));
+    }),
+);
+
 export const MonadHandlersLayer = Layer.mergeAll(
   GetBlockNumber,
   GetActiveNetwork,
@@ -308,4 +369,10 @@ export const MonadHandlersLayer = Layer.mergeAll(
   ContractFunctions,
   ContractRead,
   ContractWrite,
+  // Phase 6
+  CloudDeploy,
+  CloudStatus,
+  CloudConnectConvex,
+  CloudConnectVercel,
+  PublishedUrl,
 );

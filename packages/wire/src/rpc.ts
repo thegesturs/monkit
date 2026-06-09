@@ -150,6 +150,12 @@ import {
   ContractFunctionsRpc,
   ContractReadRpc,
   ContractWriteRpc,
+  // Phase 6
+  CloudDeployRpc,
+  CloudStatusRpc,
+  CloudConnectConvexRpc,
+  CloudConnectVercelRpc,
+  PublishedUrlRpc,
 } from "./monad.ts";
 
 /**
@@ -288,6 +294,12 @@ export const MemoizeRpcs = RpcGroup.make(
   ContractFunctionsRpc,
   ContractReadRpc,
   ContractWriteRpc,
+  // Phase 6 cloud deploy
+  CloudDeployRpc,
+  CloudStatusRpc,
+  CloudConnectConvexRpc,
+  CloudConnectVercelRpc,
+  PublishedUrlRpc,
 );
 export type MemoizeRpcs = typeof MemoizeRpcs;
 

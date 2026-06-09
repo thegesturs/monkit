@@ -312,3 +312,90 @@ export const ContractWriteRpc = Rpc.make("monad.contract.write", {
   }),
   error: MonadRpcError,
 });
+
+// ===== Phase 6: One-click cloud deploy (contract → Convex → build → Vercel) =====
+
+/** One progress event per state transition of the cloud-deploy chain. */
+export const CloudDeployStepSchema = Schema.Struct({
+  stage: Schema.Literal(
+    "deploy-contract",
+    "convex",
+    "build",
+    "vercel",
+    "done",
+  ),
+  status: Schema.Literal("started", "succeeded", "failed"),
+  log: Schema.NullOr(Schema.String),
+  convexUrl: Schema.NullOr(Schema.String),
+  contractAddress: Schema.NullOr(Schema.String),
+  shareUrl: Schema.NullOr(Schema.String),
+});
+
+/**
+ * Which stages of the cloud deploy to run. Omitted → all run (full ship). The
+ * UI exposes three toggles; `publish` covers the build + Vercel steps together.
+ */
+export const CloudDeployStagesSchema = Schema.Struct({
+  contract: Schema.Boolean,
+  convex: Schema.Boolean,
+  publish: Schema.Boolean,
+});
+
+export const CloudDeployRpc = Rpc.make("monad.cloudDeploy", {
+  payload: Schema.Struct({
+    projectId: Schema.String,
+    contractName: Schema.String,
+    constructorArgs: Schema.Array(Schema.Unknown),
+    stages: Schema.optional(CloudDeployStagesSchema),
+  }),
+  success: CloudDeployStepSchema,
+  error: MonadRpcError,
+  stream: true,
+});
+
+// ===== Cloud connections (in-app device-flow login) =====
+
+/** Whether Convex / Vercel are logged in on this machine. */
+export const CloudStatusRpc = Rpc.make("monad.cloud.status", {
+  payload: Schema.Struct({}),
+  success: Schema.Struct({
+    convex: Schema.Boolean,
+    vercel: Schema.Boolean,
+  }),
+  error: MonadRpcError,
+});
+
+/** A progress event from a device-flow login: a URL to open, a log, or done. */
+export const ConnectEventSchema = Schema.Struct({
+  type: Schema.Literal("url", "log", "done"),
+  url: Schema.NullOr(Schema.String),
+  log: Schema.NullOr(Schema.String),
+  ok: Schema.Boolean,
+});
+
+export const CloudConnectConvexRpc = Rpc.make("monad.cloud.connectConvex", {
+  payload: Schema.Struct({ projectId: Schema.String }),
+  success: ConnectEventSchema,
+  error: MonadRpcError,
+  stream: true,
+});
+
+export const CloudConnectVercelRpc = Rpc.make("monad.cloud.connectVercel", {
+  payload: Schema.Struct({}),
+  success: ConnectEventSchema,
+  error: MonadRpcError,
+  stream: true,
+});
+
+/** The last published (shareable) app URL for a project, or null. */
+export const PublishedUrlRpc = Rpc.make("monad.publishedUrl", {
+  payload: Schema.Struct({ projectId: Schema.String }),
+  success: Schema.NullOr(
+    Schema.Struct({
+      url: Schema.String,
+      deploymentUrl: Schema.NullOr(Schema.String),
+      updatedAt: Schema.String,
+    }),
+  ),
+  error: MonadRpcError,
+});

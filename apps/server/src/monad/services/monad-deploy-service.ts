@@ -1,4 +1,4 @@
-import { Context, type Effect } from "effect";
+import { Context, type Effect, type Stream } from "effect";
 
 export interface ConstructorInputInfo {
   readonly name: string;
@@ -91,6 +91,43 @@ export interface ContractWriteResult {
   readonly status: string;
 }
 
+/** Ordered stages of the one-click cloud deploy. */
+export type CloudDeployStage =
+  | "deploy-contract"
+  | "convex"
+  | "build"
+  | "vercel"
+  | "done";
+
+/** A single progress event streamed during {@link MonadDeployServiceShape.cloudDeploy}. */
+export interface CloudDeployStepInfo {
+  readonly stage: CloudDeployStage;
+  readonly status: "started" | "succeeded" | "failed";
+  /** A CLI log line, when this event carries one. */
+  readonly log: string | null;
+  /** Set on the `convex` stage success. */
+  readonly convexUrl: string | null;
+  /** Set on the `deploy-contract` stage success. */
+  readonly contractAddress: string | null;
+  /** The public Vercel URL, set on the `done` event. */
+  readonly shareUrl: string | null;
+}
+
+/** Which stages to run; omitted/undefined fields default to enabled. */
+export interface CloudDeployStages {
+  readonly contract: boolean;
+  readonly convex: boolean;
+  /** Build the frontend and publish it to Vercel. */
+  readonly publish: boolean;
+}
+
+export interface CloudDeployInput {
+  readonly projectId: string;
+  readonly contractName: string;
+  readonly constructorArgs: readonly unknown[];
+  readonly stages?: CloudDeployStages;
+}
+
 export interface MonadDeployServiceShape {
   /** Compile the project's Foundry contracts and list what's deployable. */
   readonly compile: (projectId: string) => Effect.Effect<CompileResult, Error>;
@@ -136,6 +173,52 @@ export interface MonadDeployServiceShape {
   readonly contractWrite: (
     input: ContractWriteInput,
   ) => Effect.Effect<ContractWriteResult, Error>;
+
+  /**
+   * One-click cloud deploy: contract → testnet, Convex dev deployment, frontend
+   * build, Vercel publish. Emits one progress event per state transition.
+   */
+  readonly cloudDeploy: (
+    input: CloudDeployInput,
+  ) => Stream.Stream<CloudDeployStepInfo, Error>;
+
+  /** Whether Convex / Vercel are already logged in on this machine. */
+  readonly cloudStatus: () => Effect.Effect<CloudConnectionStatus, Error>;
+
+  /** Drive the Convex device-flow login, streaming progress to the renderer. */
+  readonly connectConvex: (
+    projectId: string,
+  ) => Stream.Stream<ConnectEvent, Error>;
+
+  /** Drive the Vercel device-flow login, streaming progress to the renderer. */
+  readonly connectVercel: () => Stream.Stream<ConnectEvent, Error>;
+
+  /** The last published (shareable) app URL for a project, if any. */
+  readonly publishedUrl: (
+    projectId: string,
+  ) => Effect.Effect<PublishedAppInfo | null, Error>;
+}
+
+export interface PublishedAppInfo {
+  readonly url: string;
+  readonly deploymentUrl: string | null;
+  readonly updatedAt: string;
+}
+
+export interface CloudConnectionStatus {
+  readonly convex: boolean;
+  readonly vercel: boolean;
+}
+
+/** One progress event from a Convex/Vercel device-flow login. */
+export interface ConnectEvent {
+  readonly type: "url" | "log" | "done";
+  /** The auth URL to open in the browser (on a `url` event). */
+  readonly url: string | null;
+  /** A CLI log line (on a `log` event). */
+  readonly log: string | null;
+  /** Whether login succeeded (on a `done` event). */
+  readonly ok: boolean;
 }
 
 export class MonadDeployService extends Context.Tag(
