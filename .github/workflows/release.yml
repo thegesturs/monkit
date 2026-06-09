@@ -1,12 +1,14 @@
 name: release
 
-# Tag-driven release. Push `v0.1.0` (or any `v*` tag) to trigger a build,
-# notarize, and publish to a draft GitHub Release. Promote the draft to
-# public when the artifacts have been smoke-tested.
+# Tag-driven or manual release. Push `v0.1.0` (or any `v*` tag) — or run the
+# workflow manually from the Actions tab — to trigger a build, notarize, and
+# publish to a draft GitHub Release. Promote the draft to public when the
+# artifacts have been smoke-tested.
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
