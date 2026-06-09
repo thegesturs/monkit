@@ -28,7 +28,7 @@ export function CredentialsSheet() {
           <SheetTitle>Settings · API keys</SheetTitle>
           <SheetDescription>
             Most users don&apos;t need this. Run <code>claude /login</code> or{" "}
-            <code>codex login</code> in your terminal and memoize uses those
+            <code>codex login</code> in your terminal and monkit uses those
             credentials automatically. API keys here are an advanced fallback,
             stored in your OS keychain and only sent to the provider&apos;s SDK.
           </SheetDescription>

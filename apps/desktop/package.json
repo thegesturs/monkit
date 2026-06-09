@@ -1,17 +1,17 @@
 {
   "name": "desktop",
-  "productName": "memoize Alpha",
-  "version": "0.3.1",
-  "description": "memoize desktop app",
+  "productName": "monkit Beta",
+  "version": "0.1.0",
+  "description": "monkit desktop app",
   "private": true,
   "author": {
     "name": "Swaraj Bachu",
     "email": "swarajkumar4444@gmail.com"
   },
-  "homepage": "https://github.com/swarajbachu/memoize",
+  "homepage": "https://github.com/thegesturs/monkit",
   "repository": {
     "type": "git",
-    "url": "https://github.com/swarajbachu/memoize.git"
+    "url": "https://github.com/thegesturs/monkit.git"
   },
   "main": "dist-electron/main.cjs",
   "scripts": {

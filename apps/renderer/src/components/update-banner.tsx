@@ -120,7 +120,7 @@ export function UpdateBanner() {
           </span>
           <span className="text-[12px] leading-snug text-muted-foreground">
             {status.kind === "available" &&
-              `memoize ${status.version} is ready to install.`}
+              `monkit ${status.version} is ready to install.`}
             {status.kind === "downloading" &&
               `${Math.round(status.percent)}%${
                 status.bytesPerSecond > 0
@@ -128,7 +128,7 @@ export function UpdateBanner() {
                   : ""
               }`}
             {status.kind === "ready" &&
-              `Restart to finish installing memoize ${status.version}.`}
+              `Restart to finish installing monkit ${status.version}.`}
             {status.kind === "error" && status.message}
           </span>
         </div>

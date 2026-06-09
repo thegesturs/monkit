@@ -480,7 +480,7 @@ function ProvidersPane() {
         </Card>
         <FrameFooter className="px-2 py-1 w-full">
           <p className="text-xs leading-relaxed text-muted-foreground">
-            Memoize uses your existing CLI credentials — Claude Code, Codex,
+            Monkit uses your existing CLI credentials — Claude Code, Codex,
             Grok, Gemini, Cursor, and OpenCode all sign in through their own
             login flows.
           </p>

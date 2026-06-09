@@ -311,7 +311,7 @@ function ProviderStatus({
       : state.kind === "subscription"
         ? "Your CLI login was detected, but the required paid plan was not confirmed."
         : state.kind === "outdated"
-          ? `${PROVIDER_LABEL[providerId]} ${state.current} is too old; memoize needs ${state.required}.`
+          ? `${PROVIDER_LABEL[providerId]} ${state.current} is too old; monkit needs ${state.required}.`
           : `${PROVIDER_LABEL[providerId]}'s CLI isn't on your PATH yet.`;
 
   const command =
