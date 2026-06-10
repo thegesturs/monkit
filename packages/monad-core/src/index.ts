@@ -19,6 +19,7 @@ export * from "./interact.js";
 export * from "./codegen.js";
 export * from "./config.js";
 export * from "./frontend.js";
+export * from "./cloud.js";
 
 // Branded IDs + errors + network primitives
 export * from "./schema.js";

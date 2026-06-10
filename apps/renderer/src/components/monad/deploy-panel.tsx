@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Stream } from "effect";
 import {
   Check,
   CheckCircle2,
@@ -8,12 +8,14 @@ import {
   Fuel,
   Globe,
   Hammer,
+  Link as LinkIcon,
   Loader2,
   Play,
   RefreshCw,
   Rocket,
   Server,
   Square,
+  SquareTerminal,
   TriangleAlert,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -25,7 +27,9 @@ import type {
 } from "@memoize/wire";
 
 import { getRpcClient } from "../../lib/rpc-client.ts";
+import { useActiveContext } from "../../store/active-workspace.ts";
 import { useMonadStore } from "../../store/monad.ts";
+import { terminalsKey, useTerminalsStore } from "../../store/terminals.ts";
 import { useUiStore } from "../../store/ui.ts";
 import { Button } from "../ui/button.tsx";
 import { toastManager } from "../ui/toast.tsx";
@@ -50,6 +54,50 @@ type CompileState =
   | { kind: "no-foundry" }
   | { kind: "error"; message: string };
 
+/** The three stages a user toggles. `publish` = build + Vercel together. */
+type Stage = "contract" | "convex" | "publish";
+type StepStatus = "pending" | "active" | "done" | "failed";
+
+const STAGE_META: Record<Stage, { label: string; hint: string }> = {
+  contract: { label: "Deploy contract", hint: "to Monad testnet" },
+  convex: { label: "Convex backend", hint: "database + auth" },
+  publish: { label: "Publish frontend", hint: "build + deploy to Vercel" },
+};
+
+interface Stages {
+  contract: boolean;
+  convex: boolean;
+  publish: boolean;
+}
+
+interface CloudState {
+  running: boolean;
+  steps: Record<Stage, StepStatus>;
+  shareUrl: string | null;
+  contractAddress: string | null;
+  logTail: readonly string[];
+  error: string | null;
+}
+
+const IDLE_CLOUD: CloudState = {
+  running: false,
+  steps: { contract: "pending", convex: "pending", publish: "pending" },
+  shareUrl: null,
+  contractAddress: null,
+  logTail: [],
+  error: null,
+};
+
+/** Map a server-side stage event onto the UI's three stages (build+vercel → publish). */
+function toUiStage(
+  stage: "deploy-contract" | "convex" | "build" | "vercel" | "done",
+): Stage | null {
+  if (stage === "deploy-contract") return "contract";
+  if (stage === "convex") return "convex";
+  if (stage === "build" || stage === "vercel") return "publish";
+  return null;
+}
+
 export function DeployPanel({
   projectId,
 }: {
@@ -58,6 +106,9 @@ export function DeployPanel({
   const network = useMonadStore((s) => s.activeNetwork);
   const setActiveNetwork = useMonadStore((s) => s.setActiveNetwork);
   const openInBrowser = useUiStore((s) => s.openInBrowser);
+  const setActiveRightTab = useUiStore((s) => s.setActiveRightTab);
+  const ctx = useActiveContext();
+  const addCommandTerminal = useTerminalsStore((s) => s.addCommand);
 
   const [compile, setCompile] = useState<CompileState>({ kind: "idle" });
   const [selected, setSelected] = useState<string | null>(null);
@@ -74,6 +125,31 @@ export function DeployPanel({
   }>({ running: false, url: null, pm: null });
   const [frontendBusy, setFrontendBusy] = useState(false);
   const [codegenBusy, setCodegenBusy] = useState(false);
+  const [cloud, setCloud] = useState<CloudState>(IDLE_CLOUD);
+  const [stages, setStages] = useState<Stages>({
+    contract: true,
+    convex: true,
+    publish: true,
+  });
+  const [connections, setConnections] = useState<{
+    convex: boolean;
+    vercel: boolean;
+  }>({ convex: false, vercel: false });
+  const [connecting, setConnecting] = useState<{
+    convex: boolean;
+    vercel: boolean;
+  }>({ convex: false, vercel: false });
+  const [connect, setConnect] = useState<{
+    service: "convex" | "vercel";
+    url: string | null;
+    status: "connecting" | "done" | "error";
+    message: string | null;
+    logs: readonly string[];
+  } | null>(null);
+  const [published, setPublished] = useState<{
+    url: string;
+    updatedAt: string;
+  } | null>(null);
 
   const loadHistory = useCallback(async () => {
     try {
@@ -109,11 +185,134 @@ export function DeployPanel({
     }
   }, []);
 
+  const refreshConnections = useCallback(async () => {
+    try {
+      const client = await getRpcClient();
+      const status = await Effect.runPromise(
+        client.monad["cloud.status"]({}),
+      );
+      setConnections({ convex: status.convex, vercel: status.vercel });
+    } catch {
+      // best-effort — chips just show "Connect" until known
+    }
+  }, []);
+
+  const refreshPublished = useCallback(async () => {
+    try {
+      const client = await getRpcClient();
+      const p = await Effect.runPromise(
+        client.monad["publishedUrl"]({ projectId }),
+      );
+      setPublished(p === null ? null : { url: p.url, updatedAt: p.updatedAt });
+    } catch {
+      // best-effort
+    }
+  }, [projectId]);
+
   useEffect(() => {
     void loadHistory();
     void refreshDevnet();
     void refreshFrontend();
-  }, [loadHistory, refreshDevnet, refreshFrontend]);
+    void refreshConnections();
+    void refreshPublished();
+  }, [
+    loadHistory,
+    refreshDevnet,
+    refreshFrontend,
+    refreshConnections,
+    refreshPublished,
+  ]);
+
+  const connectService = (service: "convex" | "vercel") => {
+    if (connecting[service]) return;
+    setConnecting((c) => ({ ...c, [service]: true }));
+    setConnect({
+      service,
+      url: null,
+      status: "connecting",
+      message: null,
+      logs: [],
+    });
+    void (async () => {
+      const client = await getRpcClient();
+      const stream =
+        service === "convex"
+          ? client.monad["cloud.connectConvex"]({ projectId })
+          : client.monad["cloud.connectVercel"]({});
+      let sawUrl = false;
+      const program = Stream.runForEach(
+        stream.pipe(
+          Stream.catchAll((err) => {
+            setConnecting((c) => ({ ...c, [service]: false }));
+            setConnections((c) => ({ ...c, [service]: false }));
+            setConnect((s) => ({
+              service,
+              url: null,
+              status: "error",
+              message: err instanceof Error ? err.message : String(err),
+              logs: s?.service === service ? s.logs : [],
+            }));
+            return Stream.empty;
+          }),
+        ),
+        (ev) =>
+          Effect.sync(() => {
+            if (ev.type === "log" && ev.log !== null) {
+              setConnect((s) =>
+                s && s.service === service
+                  ? { ...s, logs: [...s.logs, ev.log as string].slice(-40) }
+                  : s,
+              );
+            }
+            if (ev.type === "url" && ev.url !== null) {
+              sawUrl = true;
+              openExternal(ev.url);
+              setConnect((s) =>
+                s && s.service === service ? { ...s, url: ev.url } : s,
+              );
+            }
+            if (ev.type === "done") {
+              setConnecting((c) => ({ ...c, [service]: false }));
+              setConnect((s) => ({
+                service,
+                url: null,
+                status: ev.ok ? "done" : "error",
+                message: ev.ok
+                  ? sawUrl
+                    ? null
+                    : "Already signed in."
+                  : (ev.log ?? "Sign-in failed."),
+                logs: s?.service === service ? s.logs : [],
+              }));
+              if (ev.ok) void refreshConnections();
+              else setConnections((c) => ({ ...c, [service]: false }));
+            }
+          }),
+      );
+      Effect.runFork(program);
+    })();
+  };
+
+  // Convex's first-time CLOUD setup is interactive by design (it prompts to
+  // pick a team / link an existing deployment), which a non-interactive spawn
+  // can't answer. So we run it once in the app's own terminal where the user
+  // can complete the prompt; every Ship afterward is non-interactive.
+  const setupConvex = () => {
+    if (ctx.status !== "ready") return;
+    const key = terminalsKey(ctx.folderId, ctx.worktreeId);
+    // `--configure` forces Convex to re-run setup (choose team + a CLOUD dev
+    // deployment) — a plain `convex dev` silently reuses whatever deployment
+    // is already selected (e.g. the local/anonymous one), which is why setup
+    // appeared to do nothing. Run interactively so the user answers prompts.
+    addCommandTerminal(key, ctx.rootPath, "Convex setup", {
+      cmd: "bash",
+      args: [
+        "-lc",
+        "cd frontend && bun install && bunx convex dev --configure --once || (echo; echo '--- setup exited; press enter to close ---'; read _)",
+      ],
+    });
+    setActiveRightTab("terminal");
+  };
 
   const startFrontend = async () => {
     setFrontendBusy(true);
@@ -242,6 +441,19 @@ export function DeployPanel({
       ? (compile.contracts.find((c) => c.name === selected) ?? null)
       : null;
 
+  // The testnet address this contract is already live at, if any — lets us
+  // default the "Deploy contract" stage off so a frontend-only change ships
+  // without redeploying the chain.
+  const alreadyLive =
+    deploys.find(
+      (d) => d.network === "testnet" && d.contractName === selected,
+    )?.address ?? null;
+
+  // When the selected contract is already deployed, default its stage off.
+  useEffect(() => {
+    setStages((s) => ({ ...s, contract: alreadyLive === null }));
+  }, [selected, alreadyLive]);
+
   const runDeploy = async () => {
     if (selectedContract === null) return;
     setDeploying(true);
@@ -267,93 +479,85 @@ export function DeployPanel({
     }
   };
 
+  const runCloudDeploy = async () => {
+    if (selectedContract === null || cloud.running) return;
+    if (!stages.contract && !stages.convex && !stages.publish) return;
+    setCloud({ ...IDLE_CLOUD, running: true });
+    const constructorArgs = selectedContract.constructorInputs.map(
+      (_, i) => args[i] ?? "",
+    );
+    const client = await getRpcClient();
+    const program = Stream.runForEach(
+      client.monad
+        .cloudDeploy({
+          projectId,
+          contractName: selectedContract.name,
+          constructorArgs,
+          stages,
+        })
+        .pipe(
+          Stream.catchAll((err) => {
+            setCloud((c) => ({
+              ...c,
+              running: false,
+              error:
+                c.error ?? (err instanceof Error ? err.message : String(err)),
+            }));
+            return Stream.empty;
+          }),
+        ),
+      (ev) =>
+        Effect.sync(() => {
+          setCloud((c) => {
+            const steps = { ...c.steps };
+            const ui = toUiStage(ev.stage);
+            if (ui !== null) {
+              if (ev.status === "failed") steps[ui] = "failed";
+              else if (ev.status === "started") steps[ui] = "active";
+              else if (ev.status === "succeeded")
+                // build succeeding just means Vercel is next — keep publishing.
+                steps[ui] = ev.stage === "build" ? "active" : "done";
+            }
+            const logTail =
+              ev.log !== null ? [...c.logTail, ev.log].slice(-40) : c.logTail;
+            return {
+              ...c,
+              steps,
+              logTail,
+              shareUrl: ev.stage === "done" ? ev.shareUrl : c.shareUrl,
+              contractAddress:
+                ev.stage === "done" ? ev.contractAddress : c.contractAddress,
+              error: ev.status === "failed" ? (ev.log ?? c.error) : c.error,
+              running:
+                ev.stage === "done" || ev.status === "failed"
+                  ? false
+                  : c.running,
+            };
+          });
+          if (ev.stage === "done") {
+            void loadHistory();
+            void refreshPublished();
+          }
+        }),
+    );
+    Effect.runFork(program);
+  };
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-      {/* Local devnet strip */}
-      {network === "local" ? (
-        <div className="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-2">
-          <div className="flex items-center gap-2 text-xs">
-            <Server className="size-3.5 text-muted-foreground" />
-            <span className="text-muted-foreground">Local devnet</span>
-            <span
-              className={
-                devnetRunning
-                  ? "text-success-foreground"
-                  : "text-muted-foreground"
-              }
-            >
-              {devnetRunning ? "running" : "stopped"}
-            </span>
-          </div>
-          {!devnetRunning ? (
-            <Button
-              size="xs"
-              variant="outline"
-              loading={devnetBusy}
-              onClick={() => void startDevnet()}
-            >
-              Start devnet
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
-
-      {/* Frontend dev server + bindings */}
-      <div className="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-2">
-        <div className="flex min-w-0 items-center gap-2 text-xs">
-          <Globe className="size-3.5 shrink-0 text-muted-foreground" />
-          <span className="text-muted-foreground">Frontend</span>
-          <span
-            className={
-              frontend.running
-                ? "truncate text-success-foreground"
-                : "text-muted-foreground"
-            }
-          >
-            {frontend.running ? (frontend.url ?? "running") : "stopped"}
-          </span>
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <Button
-            size="xs"
-            variant="ghost"
-            loading={codegenBusy}
-            onClick={() => void regenerateBindings()}
-            title="Rewrite frontend/src/contracts from deploy history"
-          >
-            <RefreshCw />
-            Bindings
-          </Button>
-          {frontend.running && frontend.url !== null ? (
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={() => openInBrowser(frontend.url as string)}
-            >
-              Open
-            </Button>
-          ) : null}
-          <Button
-            size="xs"
-            variant="outline"
-            loading={frontendBusy}
-            onClick={() =>
-              void (frontend.running ? stopFrontend() : startFrontend())
-            }
-          >
-            {frontend.running ? <Square /> : <Play />}
-            {frontend.running ? "Stop" : "Run"}
-          </Button>
-        </div>
-      </div>
-
       <div className="flex flex-col gap-3 p-3">
-        {/* Compile + contract selection */}
-        <div className="flex flex-col gap-2 rounded-xl border border-border bg-card p-3">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Contract
-            </span>
+        {/* Live app — the saved public share link (persists across reloads) */}
+        {published !== null ? (
+          <PublishedCard
+            url={published.url}
+            onOpen={(url) => openInBrowser(url)}
+            onOpenExternal={(url) => openExternal(url)}
+          />
+        ) : null}
+
+        {/* 1 — Contract: compile + pick + constructor args */}
+        <Card>
+          <CardHeader title="Contract">
             <Button
               size="xs"
               variant="outline"
@@ -363,7 +567,7 @@ export function DeployPanel({
               <Hammer />
               {compile.kind === "ready" ? "Recompile" : "Compile"}
             </Button>
-          </div>
+          </CardHeader>
 
           {compile.kind === "no-foundry" ? (
             <FoundryBanner />
@@ -382,11 +586,6 @@ export function DeployPanel({
               </p>
             ) : (
               <>
-                <p className="text-[11px] text-muted-foreground">
-                  {compile.contracts.length === 1
-                    ? "Found 1 contract — pick a network and deploy."
-                    : `Found ${compile.contracts.length} contracts — select one to deploy.`}
-                </p>
                 <div className="flex flex-wrap gap-1.5">
                   {compile.contracts.map((c) => (
                     <button
@@ -437,42 +636,73 @@ export function DeployPanel({
               Looking for contracts…
             </div>
           )}
-        </div>
+        </Card>
 
-        {/* Deploy action */}
+        {/* 2 — Deploy: cloud ship on testnet, plain on-chain deploy otherwise */}
         {selectedContract ? (
-          <div className="flex flex-col gap-2">
-            <Button loading={deploying} onClick={() => void runDeploy()}>
-              <Rocket />
-              Deploy {selectedContract.name} to {NETWORK_META[network].short}
-            </Button>
-            {network !== "local" ? (
-              <p className="text-center text-[11px] text-muted-foreground">
-                Deploys to {NETWORK_META[network].label} and signs with your
-                most recent burner wallet.
-              </p>
-            ) : null}
-            {deployError !== null ? (
-              <MonadErrorCard
-                message={deployError}
-                network={network}
-                context="deploy"
-                onSwitchNetwork={(id) => void setActiveNetwork(id)}
-              />
-            ) : null}
-          </div>
+          network === "testnet" ? (
+            <ShipCard
+              contract={selectedContract.name}
+              cloud={cloud}
+              stages={stages}
+              alreadyLive={alreadyLive}
+              connections={connections}
+              connecting={connecting}
+              connect={connect}
+              onConnect={connectService}
+              onOpenAuthUrl={(url) => openExternal(url)}
+              onSetupConvex={setupConvex}
+              onToggle={(stage) =>
+                setStages((s) => ({ ...s, [stage]: !s[stage] }))
+              }
+              onRun={() => void runCloudDeploy()}
+              onOpen={(url) => openInBrowser(url)}
+            />
+          ) : (
+            <PlainDeployCard
+              contract={selectedContract.name}
+              network={network}
+              deploying={deploying}
+              error={deployError}
+              onDeploy={() => void runDeploy()}
+              onSwitchNetwork={(id) => void setActiveNetwork(id)}
+              onSwitchTestnet={() => void setActiveNetwork("testnet")}
+            />
+          )
         ) : null}
 
-        {/* Deploy history */}
+        {/* 3 — Frontend dev server + bindings */}
+        <FrontendCard
+          frontend={frontend}
+          busy={frontendBusy}
+          bindingsBusy={codegenBusy}
+          onRun={() => void startFrontend()}
+          onStop={() => void stopFrontend()}
+          onOpen={(url) => openInBrowser(url)}
+          onBindings={() => void regenerateBindings()}
+        />
+
+        {/* 4 — Local devnet (local network only) */}
+        {network === "local" ? (
+          <DevnetCard
+            running={devnetRunning}
+            busy={devnetBusy}
+            onStart={() => void startDevnet()}
+          />
+        ) : null}
+
+        {/* 5 — Deploy history */}
         {deploys.length > 0 ? (
-          <div className="flex flex-col gap-1.5">
+          <Card>
             <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               History
             </span>
-            {deploys.map((d) => (
-              <DeployRow key={d.id} deploy={d} />
-            ))}
-          </div>
+            <div className="flex flex-col gap-1.5">
+              {deploys.map((d) => (
+                <DeployRow key={d.id} deploy={d} />
+              ))}
+            </div>
+          </Card>
         ) : compile.kind === "ready" && compile.contracts.length === 0 ? (
           <Empty className="py-8">
             <EmptyMedia variant="icon">
@@ -486,6 +716,37 @@ export function DeployPanel({
           </Empty>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/** A consistent panel card — every section in the Deploy panel uses this. */
+function Card({
+  children,
+}: {
+  children: React.ReactNode;
+}): React.ReactElement {
+  return (
+    <div className="flex flex-col gap-2.5 rounded-xl border border-border bg-card p-3">
+      {children}
+    </div>
+  );
+}
+
+/** Card header row: an uppercase label on the left, optional action on the right. */
+function CardHeader({
+  title,
+  children,
+}: {
+  title: string;
+  children?: React.ReactNode;
+}): React.ReactElement {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        {title}
+      </span>
+      {children}
     </div>
   );
 }
@@ -705,6 +966,630 @@ function DeployRow({ deploy }: { deploy: DeployRecord }): React.ReactElement {
         ) : null}
       </div>
     </div>
+  );
+}
+
+/**
+ * The persistent "Live app" box: the saved public share URL. Stays visible
+ * across reloads (loaded from the DB) so the user always has the shareable link
+ * handy to copy, open, or open in a real browser to share.
+ */
+function PublishedCard({
+  url,
+  onOpen,
+  onOpenExternal,
+}: {
+  url: string;
+  onOpen: (url: string) => void;
+  onOpenExternal: (url: string) => void;
+}): React.ReactElement {
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-success/30 bg-success/[0.06] p-3">
+      <div className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+        <Globe className="size-4 shrink-0 text-success" />
+        Your live app
+      </div>
+      <ShareUrl url={url} />
+      <div className="flex gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          className="flex-1"
+          onClick={() => onOpen(url)}
+        >
+          <Play />
+          Open
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="flex-1"
+          onClick={() => onOpenExternal(url)}
+        >
+          <ExternalLink />
+          Share
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The primary testnet action: a one-click full-stack ship (contract → Convex →
+ * frontend → Vercel) where each stage is a toggle you can skip. Before a run the
+ * rows are checkboxes; during/after they become a progress stepper.
+ */
+function ShipCard({
+  contract,
+  cloud,
+  stages,
+  alreadyLive,
+  connections,
+  connecting,
+  connect,
+  onConnect,
+  onOpenAuthUrl,
+  onSetupConvex,
+  onToggle,
+  onRun,
+  onOpen,
+}: {
+  contract: string;
+  cloud: CloudState;
+  stages: Stages;
+  alreadyLive: string | null;
+  connections: { convex: boolean; vercel: boolean };
+  connecting: { convex: boolean; vercel: boolean };
+  connect: {
+    service: "convex" | "vercel";
+    url: string | null;
+    status: "connecting" | "done" | "error";
+    message: string | null;
+    logs: readonly string[];
+  } | null;
+  onConnect: (service: "convex" | "vercel") => void;
+  onOpenAuthUrl: (url: string) => void;
+  onSetupConvex: () => void;
+  onToggle: (stage: Stage) => void;
+  onRun: () => void;
+  onOpen: (url: string) => void;
+}): React.ReactElement {
+  const running = cloud.running;
+  const finished =
+    !running &&
+    (cloud.shareUrl !== null ||
+      cloud.contractAddress !== null ||
+      cloud.error !== null);
+  // Rows are a live stepper only while running; once done they return to
+  // toggles so the user can reconfigure and ship again.
+  const showStatus = running;
+  const nothingSelected =
+    !stages.contract && !stages.convex && !stages.publish;
+
+  // A stage that needs a cloud account can't ship until it's connected.
+  const needConvex = stages.convex && !connections.convex;
+  const needVercel = stages.publish && !connections.vercel;
+  const blocked = needConvex || needVercel;
+
+  const buttonLabel = stages.publish
+    ? finished
+      ? "Ship again"
+      : "Ship to the cloud"
+    : stages.contract && !stages.convex
+      ? "Deploy contract"
+      : "Run selected steps";
+
+  return (
+    <Card>
+      <CardHeader title="Deploy">
+        <span className="text-[10px] text-muted-foreground/70">
+          testnet · Convex + Vercel
+        </span>
+      </CardHeader>
+
+      {/* Cloud account connections */}
+      <div className="flex flex-wrap gap-1.5">
+        <ConnectChip
+          label="Convex"
+          connected={connections.convex}
+          connecting={connecting.convex}
+          onConnect={() => onConnect("convex")}
+        />
+        <ConnectChip
+          label="Vercel"
+          connected={connections.vercel}
+          connecting={connecting.vercel}
+          onConnect={() => onConnect("vercel")}
+        />
+        <button
+          type="button"
+          onClick={onSetupConvex}
+          title="Run Convex's one-time interactive setup in the terminal"
+          className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <SquareTerminal className="size-3" />
+          Set up Convex
+        </button>
+      </div>
+
+      {/* Active sign-in: show the auth URL as a fallback + status */}
+      {connect !== null &&
+      (connect.status === "connecting" || connect.status === "error") ? (
+        <div
+          className={
+            connect.status === "error"
+              ? "flex flex-col gap-1.5 rounded-lg border border-destructive/40 bg-destructive/10 p-2.5 text-[11px]"
+              : "flex flex-col gap-1.5 rounded-lg border border-border bg-muted/30 p-2.5 text-[11px]"
+          }
+        >
+          {connect.status === "connecting" ? (
+            <span className="text-muted-foreground">
+              {connect.url !== null
+                ? `Finishing ${connect.service === "convex" ? "Convex" : "Vercel"} sign-in in your browser…`
+                : `Starting ${connect.service === "convex" ? "Convex" : "Vercel"} sign-in…`}
+            </span>
+          ) : (
+            <span className="text-destructive-foreground">
+              {connect.message ?? "Sign-in failed."}
+            </span>
+          )}
+          {connect.url !== null ? (
+            <button
+              type="button"
+              onClick={() => onOpenAuthUrl(connect.url as string)}
+              className="flex items-center gap-1 self-start text-foreground underline-offset-2 hover:underline"
+            >
+              <ExternalLink className="size-3" />
+              Browser didn’t open? Click to sign in
+            </button>
+          ) : null}
+          {connect.logs.length > 0 ? (
+            <pre className="mt-0.5 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-background/40 p-2 font-mono text-[10px] text-muted-foreground">
+              {connect.logs.join("\n")}
+            </pre>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="flex flex-col">
+        <StageRow
+          stage="contract"
+          enabled={stages.contract}
+          status={cloud.steps.contract}
+          showStatus={showStatus}
+          disabled={running}
+          onToggle={() => onToggle("contract")}
+          note={
+            alreadyLive !== null && !stages.contract
+              ? `live · ${truncateAddress(alreadyLive)}`
+              : null
+          }
+        />
+        <StageRow
+          stage="convex"
+          enabled={stages.convex}
+          status={cloud.steps.convex}
+          showStatus={showStatus}
+          disabled={running}
+          onToggle={() => onToggle("convex")}
+          note={null}
+        />
+        <StageRow
+          stage="publish"
+          enabled={stages.publish}
+          status={cloud.steps.publish}
+          showStatus={showStatus}
+          disabled={running}
+          onToggle={() => onToggle("publish")}
+          note={null}
+        />
+      </div>
+
+      {!running ? (
+        <>
+          <Button
+            loading={running}
+            disabled={nothingSelected || blocked}
+            onClick={onRun}
+            title={`Deploy ${contract} and the selected steps`}
+          >
+            <Rocket />
+            {buttonLabel}
+          </Button>
+          {blocked ? (
+            <p className="text-center text-[11px] text-muted-foreground">
+              Connect{" "}
+              {needConvex && needVercel
+                ? "Convex and Vercel"
+                : needConvex
+                  ? "Convex"
+                  : "Vercel"}{" "}
+              above to ship.
+            </p>
+          ) : null}
+        </>
+      ) : null}
+
+      {cloud.error !== null ? (
+        <div className="flex flex-col gap-1 rounded-lg border border-destructive/40 bg-destructive/10 p-2.5 text-[11px] text-destructive-foreground">
+          <div className="flex items-start gap-1.5">
+            <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+            <span className="whitespace-pre-wrap leading-relaxed">
+              {cloud.error}
+            </span>
+          </div>
+          <span className="pl-5 text-[10px] text-muted-foreground">
+            Full log: ~/.monkit/cloud-deploy.log
+          </span>
+        </div>
+      ) : null}
+
+      {cloud.shareUrl !== null ? (
+        <div className="flex flex-col gap-2 rounded-lg border border-success/30 bg-success/[0.06] p-3">
+          <div className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+            <CheckCircle2 className="size-4 shrink-0 text-success" />
+            Your dApp is live
+          </div>
+          <ShareUrl url={cloud.shareUrl} />
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => onOpen(cloud.shareUrl as string)}
+          >
+            <ExternalLink />
+            Open dApp
+          </Button>
+        </div>
+      ) : finished &&
+        cloud.error === null &&
+        cloud.contractAddress !== null ? (
+        <div className="flex flex-col gap-2 rounded-lg border border-success/30 bg-success/[0.06] p-3">
+          <div className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+            <CheckCircle2 className="size-4 shrink-0 text-success" />
+            Contract deployed
+          </div>
+          <CopyAddress address={cloud.contractAddress} />
+        </div>
+      ) : null}
+
+      {cloud.logTail.length > 0 && cloud.shareUrl === null ? (
+        <details className="group">
+          <summary className="cursor-pointer list-none text-[11px] text-muted-foreground/70 transition-colors hover:text-foreground">
+            {running ? "Show progress logs" : "Show logs"}
+          </summary>
+          <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-background/40 p-2 font-mono text-[10px] text-muted-foreground">
+            {cloud.logTail.join("\n")}
+          </pre>
+        </details>
+      ) : null}
+    </Card>
+  );
+}
+
+/**
+ * A small account chip: shows "✓ Connected" once linked, or a "Connect" button
+ * that kicks off the in-app device-flow login (opens the browser). No terminal.
+ */
+function ConnectChip({
+  label,
+  connected,
+  connecting,
+  onConnect,
+}: {
+  label: string;
+  connected: boolean;
+  connecting: boolean;
+  onConnect: () => void;
+}): React.ReactElement {
+  if (connected) {
+    return (
+      <span className="flex items-center gap-1 rounded-md border border-success/30 bg-success/[0.06] px-2 py-1 text-[11px] text-foreground">
+        <CheckCircle2 className="size-3 text-success" />
+        {label}
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      disabled={connecting}
+      onClick={onConnect}
+      className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-70"
+      title={`Connect ${label} — opens your browser to sign in`}
+    >
+      {connecting ? (
+        <>
+          <Loader2 className="size-3 animate-spin" />
+          {label} · waiting…
+        </>
+      ) : (
+        <>
+          <LinkIcon className="size-3" />
+          Connect {label}
+        </>
+      )}
+    </button>
+  );
+}
+
+/**
+ * A single stage row that is a checkbox before a run and a status icon during/
+ * after it. Keeps the checklist and the progress stepper as one tidy element.
+ */
+function StageRow({
+  stage,
+  enabled,
+  status,
+  showStatus,
+  disabled,
+  onToggle,
+  note,
+}: {
+  stage: Stage;
+  enabled: boolean;
+  status: StepStatus;
+  showStatus: boolean;
+  disabled: boolean;
+  onToggle: () => void;
+  note: string | null;
+}): React.ReactElement {
+  const { label, hint } = STAGE_META[stage];
+  const dim = showStatus ? !enabled : false;
+
+  const control = showStatus ? (
+    !enabled ? (
+      <div className="size-4 shrink-0" />
+    ) : status === "done" ? (
+      <CheckCircle2 className="size-4 shrink-0 text-success" />
+    ) : status === "failed" ? (
+      <TriangleAlert className="size-4 shrink-0 text-destructive" />
+    ) : status === "active" ? (
+      <Loader2 className="size-4 shrink-0 animate-spin text-primary" />
+    ) : (
+      <div className="size-4 shrink-0 rounded-full border border-border" />
+    )
+  ) : (
+    <span
+      className={
+        enabled
+          ? "flex size-4 shrink-0 items-center justify-center rounded-[5px] bg-primary text-primary-foreground"
+          : "flex size-4 shrink-0 items-center justify-center rounded-[5px] border border-input"
+      }
+    >
+      {enabled ? <Check className="size-3" /> : null}
+    </span>
+  );
+
+  const row = (
+    <div className="flex items-center gap-2.5 py-1.5">
+      {control}
+      <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+        <span
+          className={
+            dim
+              ? "text-xs text-muted-foreground/50 line-through"
+              : status === "failed" && showStatus
+                ? "text-xs text-destructive-foreground"
+                : "text-xs text-foreground"
+          }
+        >
+          {label}
+        </span>
+        <span className="truncate text-[10px] text-muted-foreground/70">
+          {note ?? hint}
+        </span>
+      </span>
+    </div>
+  );
+
+  if (showStatus) return row;
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onToggle}
+      className="-mx-1 rounded-lg px-1 text-left transition-colors hover:bg-muted/50 disabled:opacity-60"
+    >
+      {row}
+    </button>
+  );
+}
+
+/**
+ * Plain on-chain deploy for local / mainnet (no Convex/Vercel). Cloud ship is
+ * testnet-only, so other networks get the single-action card with a nudge to
+ * switch to testnet to publish a shareable app.
+ */
+function PlainDeployCard({
+  contract,
+  network,
+  deploying,
+  error,
+  onDeploy,
+  onSwitchNetwork,
+  onSwitchTestnet,
+}: {
+  contract: string;
+  network: NetworkId;
+  deploying: boolean;
+  error: string | null;
+  onDeploy: () => void;
+  onSwitchNetwork: (id: NetworkId) => void;
+  onSwitchTestnet: () => void;
+}): React.ReactElement {
+  return (
+    <Card>
+      <CardHeader title="Deploy">
+        <span className="text-[10px] text-muted-foreground/70">
+          {NETWORK_META[network].label}
+        </span>
+      </CardHeader>
+      <Button loading={deploying} onClick={onDeploy}>
+        <Rocket />
+        Deploy {contract} to {NETWORK_META[network].short}
+      </Button>
+      <button
+        type="button"
+        onClick={onSwitchTestnet}
+        className="text-left text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+      >
+        Want a shareable URL? Switch to Testnet to publish to the cloud →
+      </button>
+      {error !== null ? (
+        <MonadErrorCard
+          message={error}
+          network={network}
+          context="deploy"
+          onSwitchNetwork={onSwitchNetwork}
+        />
+      ) : null}
+    </Card>
+  );
+}
+
+/** Frontend dev server + bindings, as a card. */
+function FrontendCard({
+  frontend,
+  busy,
+  bindingsBusy,
+  onRun,
+  onStop,
+  onOpen,
+  onBindings,
+}: {
+  frontend: { running: boolean; url: string | null; pm: string | null };
+  busy: boolean;
+  bindingsBusy: boolean;
+  onRun: () => void;
+  onStop: () => void;
+  onOpen: (url: string) => void;
+  onBindings: () => void;
+}): React.ReactElement {
+  return (
+    <Card>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2 text-xs">
+          <Globe className="size-3.5 shrink-0 text-muted-foreground" />
+          <span className="font-semibold uppercase tracking-wide text-muted-foreground">
+            Frontend
+          </span>
+          <span
+            className={
+              frontend.running
+                ? "truncate text-success-foreground"
+                : "text-muted-foreground/70"
+            }
+          >
+            {frontend.running ? (frontend.url ?? "running") : "stopped"}
+          </span>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            size="xs"
+            variant="ghost"
+            loading={bindingsBusy}
+            onClick={onBindings}
+            title="Rewrite frontend/src/contracts from deploy history"
+          >
+            <RefreshCw />
+            Bindings
+          </Button>
+          {frontend.running && frontend.url !== null ? (
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => onOpen(frontend.url as string)}
+            >
+              Open
+            </Button>
+          ) : null}
+          <Button
+            size="xs"
+            variant="outline"
+            loading={busy}
+            onClick={frontend.running ? onStop : onRun}
+          >
+            {frontend.running ? <Square /> : <Play />}
+            {frontend.running ? "Stop" : "Run"}
+          </Button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+/** Local devnet status + start, as a card. */
+function DevnetCard({
+  running,
+  busy,
+  onStart,
+}: {
+  running: boolean;
+  busy: boolean;
+  onStart: () => void;
+}): React.ReactElement {
+  return (
+    <Card>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-xs">
+          <Server className="size-3.5 text-muted-foreground" />
+          <span className="font-semibold uppercase tracking-wide text-muted-foreground">
+            Local devnet
+          </span>
+          <span
+            className={
+              running ? "text-success-foreground" : "text-muted-foreground/70"
+            }
+          >
+            {running ? "running" : "stopped"}
+          </span>
+        </div>
+        {!running ? (
+          <Button size="xs" variant="outline" loading={busy} onClick={onStart}>
+            Start devnet
+          </Button>
+        ) : null}
+      </div>
+    </Card>
+  );
+}
+
+/** Click-to-copy shareable URL chip. */
+function ShareUrl({ url }: { url: string }): React.ReactElement {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard?.writeText(url).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      },
+      () => {
+        /* clipboard unavailable — no-op */
+      },
+    );
+  };
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      title="Copy link"
+      className="group flex w-full items-center justify-between gap-2 rounded-md border border-border bg-background/60 px-2.5 py-2 text-left transition-colors hover:bg-muted"
+    >
+      <span className="truncate font-mono text-xs text-foreground">{url}</span>
+      <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground transition-colors group-hover:text-foreground">
+        {copied ? (
+          <>
+            <Check className="size-3.5 text-success" />
+            Copied
+          </>
+        ) : (
+          <>
+            <Copy className="size-3.5" />
+            Copy
+          </>
+        )}
+      </span>
+    </button>
   );
 }
 

@@ -11,10 +11,17 @@ import type { FolderId, WorktreeId } from "@memoize/wire";
  * Keyed by `(folderId, worktreeId)` so each workspace gets its own list and
  * switching projects/worktrees doesn't shuffle terminals between them.
  */
+export type TerminalCommand = {
+  readonly cmd: string;
+  readonly args: ReadonlyArray<string>;
+};
+
 export type TerminalInstance = {
   readonly id: string;
   readonly title: string;
   readonly cwd: string;
+  /** When set, the PTY runs this command instead of the default shell. */
+  readonly command?: TerminalCommand;
 };
 
 type TerminalsState = {
@@ -22,6 +29,13 @@ type TerminalsState = {
   readonly activeByKey: Readonly<Record<string, string | null>>;
   readonly ensureSeed: (key: string, cwd: string) => void;
   readonly add: (key: string, cwd: string) => string;
+  /** Add a terminal that runs a specific command (e.g. a guided setup). */
+  readonly addCommand: (
+    key: string,
+    cwd: string,
+    title: string,
+    command: TerminalCommand,
+  ) => string;
   readonly remove: (key: string, id: string) => void;
   readonly setActive: (key: string, id: string) => void;
 };
@@ -64,6 +78,18 @@ export const useTerminalsStore = create<TerminalsState>((set) => ({
     set((state) => {
       const list = state.byKey[key] ?? [];
       const instance: TerminalInstance = { id, title: nextTitle(list), cwd };
+      return {
+        byKey: { ...state.byKey, [key]: [...list, instance] },
+        activeByKey: { ...state.activeByKey, [key]: id },
+      };
+    });
+    return id;
+  },
+  addCommand: (key, cwd, title, command) => {
+    const id = newId();
+    set((state) => {
+      const list = state.byKey[key] ?? [];
+      const instance: TerminalInstance = { id, title, cwd, command };
       return {
         byKey: { ...state.byKey, [key]: [...list, instance] },
         activeByKey: { ...state.activeByKey, [key]: id },

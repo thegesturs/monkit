@@ -9,6 +9,9 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
+      // Mirror tsconfig's `@convex/*` so Vite resolves Convex's generated API
+      // (e.g. `import { api } from "@convex/_generated/api"`).
+      "@convex": fileURLToPath(new URL("./convex", import.meta.url)),
     },
   },
   build: { outDir: "dist" },

@@ -1,17 +1,28 @@
 import { type ChildProcess, execFile, spawn } from "node:child_process";
+import { join } from "node:path";
 import keytar from "keytar";
 import { SqlClient } from "@effect/sql";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Mailbox, Stream } from "effect";
 import {
+  buildFrontend,
   classifyAbiFunctions,
+  CLOUD_LOG_FILE,
+  cloudLog,
+  CloudCommandError,
   type CodegenContract,
   coerceArgs,
   compileProject,
+  convexConnected,
+  convexDevOnce,
+  convexLogin,
   deployContract,
   detectPackageManager,
+  ensureFrontendDeps,
   findAbiFunction,
   getNetwork,
+  hasConvexCli,
   hasFoundry,
+  hasVercelCli,
   listCompiledContracts,
   type NetworkId,
   parseDevServerUrl,
@@ -20,14 +31,22 @@ import {
   resolveContracts,
   resolveFrontend,
   stringifyContractResult,
+  vercelConnected,
+  vercelDeployStatic,
+  vercelLogin,
   writeContractFn,
   writeFrontendBindings,
 } from "@memoize/monad-core";
 
 import {
   MonadDeployService,
+  type CloudConnectionStatus,
+  type CloudDeployInput,
+  type CloudDeployStage,
+  type CloudDeployStepInfo,
   type CodegenResultInfo,
   type CompiledContractInfo,
+  type ConnectEvent,
   type ContractFunctionsResult,
   type ContractReadInput,
   type ContractWriteInput,
@@ -151,6 +170,62 @@ async function waitForDevnet(timeoutMs = 8_000): Promise<void> {
     await new Promise((r) => setTimeout(r, 250));
   }
   throw new Error("Local devnet did not become ready in time");
+}
+
+/**
+ * Turn a Convex/Vercel CLI failure into a short, actionable message. The most
+ * common cause is "not logged in" — the user fixes it by running the CLI's
+ * login once in a terminal (we deliberately store no tokens).
+ */
+function classifyCloudError(
+  stage: "convex" | "vercel",
+  cause: unknown,
+): string {
+  const output =
+    cause instanceof CloudCommandError
+      ? cause.output
+      : cause instanceof Error
+        ? cause.message
+        : String(cause);
+  const lower = output.toLowerCase();
+  if (stage === "convex") {
+    // Missing deps — esbuild can't resolve `convex/server` etc. (scaffold
+    // never ran install). The ship flow auto-installs now, so this is rare.
+    if (
+      /could not resolve|cannot find module|module not found|esbuild failed/.test(
+        lower,
+      )
+    ) {
+      return 'Convex couldn\'t bundle your functions — the frontend dependencies need installing. Click "Set up Convex" above (it installs them), then Ship again.';
+    }
+    // Local/anonymous backend, or Convex needs an INTERACTIVE prompt (link to
+    // account / pick a team) to create a cloud one — a non-interactive ship
+    // can't answer. Route to the one-time terminal setup, NOT "Connect" (the
+    // user is already signed in). Note: "run npx convex login to link to a
+    // project" is about LINKING, not auth — so it lives here.
+    if (
+      /no convex account|link to a project|127\.0\.0\.1|local.*deployment|cannot prompt|non-interactive|link your existing deployment|anonymous|select.*team|which team|configure|create a (new )?project/.test(
+        lower,
+      )
+    ) {
+      return 'Convex needs its one-time cloud setup. Click "Set up Convex" above and finish the prompt in the terminal, then Ship again.';
+    }
+    if (/not logged in|not authenticated/.test(lower)) {
+      return "Not connected to Convex — use Connect Convex above, then retry.";
+    }
+  } else {
+    if (/no existing credentials|please run ['"`]?vercel login|not authenticated/.test(lower)) {
+      return "Not connected to Vercel — use Connect Vercel above, then retry.";
+    }
+  }
+  // Fall back to the last few non-empty lines of real output so the actual
+  // failure is never hidden behind a guessed message.
+  const lines = output
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l !== "");
+  const tail = lines.slice(-4).join("\n");
+  return tail !== "" ? tail : `${stage} deploy failed.`;
 }
 
 export const MonadDeployServiceLive = Layer.effect(
@@ -652,6 +727,347 @@ export const MonadDeployServiceLive = Layer.effect(
         } satisfies ContractWriteResult;
       });
 
+    const cloudDeploy = (
+      input: CloudDeployInput,
+    ): Stream.Stream<CloudDeployStepInfo, Error> =>
+      Stream.async<CloudDeployStepInfo, Error>((emit) => {
+        const event = (
+          stage: CloudDeployStage,
+          status: CloudDeployStepInfo["status"],
+          extra?: Partial<CloudDeployStepInfo>,
+        ) => {
+          // Mirror every step (esp. failures) into the debug log.
+          if (status !== "started" || extra?.log == null) {
+            void cloudLog(
+              `cloudDeploy[${stage}] ${status}${extra?.log != null ? `: ${extra.log}` : ""}`,
+            );
+          }
+          void emit.single({
+            stage,
+            status,
+            log: null,
+            convexUrl: null,
+            contractAddress: null,
+            shareUrl: null,
+            ...extra,
+          });
+        };
+
+        // Which stages to run — omitted flags default to enabled (full ship).
+        const stages = {
+          contract: input.stages?.contract ?? true,
+          convex: input.stages?.convex ?? true,
+          publish: input.stages?.publish ?? true,
+        };
+        void cloudLog(
+          `=== cloudDeploy start project=${input.projectId} contract=${input.contractName} stages=${JSON.stringify(stages)}`,
+        );
+
+        void (async () => {
+          try {
+            if (!stages.contract && !stages.convex && !stages.publish) {
+              emit.fail(new Error("Nothing selected to deploy."));
+              return;
+            }
+
+            const root = await Effect.runPromise(projectRoot(input.projectId));
+            const resolved = await resolveFrontend(root);
+            // Convex + publish need the frontend package; a contract-only run
+            // doesn't.
+            if ((stages.convex || stages.publish) && !resolved.exists) {
+              const msg = "This project has no frontend package to deploy.";
+              event("build", "failed", { log: msg });
+              emit.fail(new Error(msg));
+              return;
+            }
+            const frontendDir = resolved.frontendDir;
+
+            let contractAddress: string | null = null;
+            let convexUrl: string | null = null;
+            let shareUrl: string | null = null;
+
+            // Step 1 — deploy the contract to testnet (also auto-codegens the
+            // frontend bindings, so addresses are baked in before the build).
+            if (stages.contract) {
+              event("deploy-contract", "started");
+              const record = await Effect.runPromise(
+                deploy({
+                  projectId: input.projectId,
+                  contractName: input.contractName,
+                  constructorArgs: input.constructorArgs,
+                  network: "testnet",
+                }),
+              );
+              contractAddress = record.address;
+              event("deploy-contract", "succeeded", { contractAddress });
+            }
+
+            const pm = await detectPackageManager(frontendDir);
+
+            // Scaffolded projects ship without node_modules, which makes both
+            // `convex dev` (can't resolve `convex/server`) and the Vite build
+            // fail. Install once up front when anything needs the frontend.
+            if (stages.convex || stages.publish) {
+              try {
+                const { installed } = await ensureFrontendDeps({
+                  frontendDir,
+                  pm,
+                  onLog: (line) =>
+                    event("convex", "started", { log: line }),
+                });
+                if (installed) void cloudLog("installed frontend deps");
+              } catch (cause) {
+                const msg =
+                  cause instanceof CloudCommandError
+                    ? cause.output.split(/\r?\n/).slice(-20).join("\n")
+                    : cause instanceof Error
+                      ? cause.message
+                      : String(cause);
+                event("convex", "failed", {
+                  log: `Couldn't install frontend dependencies:\n${msg}`,
+                });
+                emit.fail(new Error("Couldn't install frontend dependencies."));
+                return;
+              }
+            }
+
+            // Step 2 — push the Convex backend to its cloud dev deployment.
+            if (stages.convex) {
+              event("convex", "started");
+              if (!(await hasConvexCli(frontendDir, pm))) {
+                const msg =
+                  "Convex CLI not found in the frontend package — run `bun install` (or your package manager) first.";
+                event("convex", "failed", { log: msg });
+                emit.fail(new Error(msg));
+                return;
+              }
+              try {
+                const result = await convexDevOnce({
+                  frontendDir,
+                  pm,
+                  onLog: (line) => event("convex", "started", { log: line }),
+                });
+                convexUrl = result.url;
+              } catch (cause) {
+                const msg = classifyCloudError("convex", cause);
+                event("convex", "failed", { log: msg });
+                emit.fail(new Error(msg));
+                return;
+              }
+              // A local/anonymous backend (127.0.0.1) isn't reachable by a
+              // published app — require a shareable cloud deployment.
+              if (/127\.0\.0\.1|localhost/.test(convexUrl)) {
+                const msg =
+                  'Convex is on a local backend, which a published app can\'t reach. Click "Set up Convex" above to create a shareable cloud backend, then Ship again.';
+                event("convex", "failed", { log: msg });
+                emit.fail(new Error(msg));
+                return;
+              }
+              event("convex", "succeeded", { convexUrl });
+            }
+
+            if (stages.publish) {
+              // Step 3 — build the frontend (Vite inlines VITE_CONVEX_URL +
+              // contract addresses from the prior two steps).
+              event("build", "started");
+              try {
+                await buildFrontend({
+                  frontendDir,
+                  pm,
+                  onLog: (line) => event("build", "started", { log: line }),
+                });
+              } catch (cause) {
+                const msg =
+                  cause instanceof CloudCommandError
+                    ? cause.output.split(/\r?\n/).slice(-30).join("\n")
+                    : cause instanceof Error
+                      ? cause.message
+                      : String(cause);
+                event("build", "failed", { log: msg });
+                emit.fail(new Error("Frontend build failed."));
+                return;
+              }
+              event("build", "succeeded");
+
+              // Step 4 — publish the static build to Vercel.
+              event("vercel", "started");
+              if (!(await hasVercelCli())) {
+                const msg =
+                  "Vercel CLI not found — install it with `npm i -g vercel`, then retry.";
+                event("vercel", "failed", { log: msg });
+                emit.fail(new Error(msg));
+                return;
+              }
+              try {
+                const result = await vercelDeployStatic({
+                  distDir: join(frontendDir, "dist"),
+                  onLog: (line) => event("vercel", "started", { log: line }),
+                });
+                shareUrl = result.url;
+                // Persist the public URL so the share box survives reloads.
+                await Effect.runPromise(
+                  sql`
+                    INSERT INTO monad_published
+                      (project_id, url, deployment_url, updated_at)
+                    VALUES
+                      (${input.projectId}, ${result.url}, ${result.deploymentUrl}, ${new Date().toISOString()})
+                    ON CONFLICT(project_id) DO UPDATE SET
+                      url = excluded.url,
+                      deployment_url = excluded.deployment_url,
+                      updated_at = excluded.updated_at
+                  `.pipe(Effect.catchAll(() => Effect.void)),
+                );
+              } catch (cause) {
+                const msg = classifyCloudError("vercel", cause);
+                event("vercel", "failed", { log: msg });
+                emit.fail(new Error(msg));
+                return;
+              }
+              event("vercel", "succeeded");
+            }
+
+            event("done", "succeeded", { shareUrl, contractAddress, convexUrl });
+            emit.end();
+          } catch (cause) {
+            const msg = cause instanceof Error ? cause.message : String(cause);
+            void cloudLog(`!!! cloudDeploy crashed: ${msg}`);
+            emit.fail(cause instanceof Error ? cause : new Error(msg));
+          }
+        })();
+      }, 16_384);
+
+    const publishedUrl = (projectId: string) =>
+      Effect.gen(function* () {
+        const rows = yield* sql<{
+          url: string;
+          deploymentUrl: string | null;
+          updatedAt: string;
+        }>`
+          SELECT url, deployment_url AS deploymentUrl, updated_at AS updatedAt
+          FROM monad_published WHERE project_id = ${projectId} LIMIT 1
+        `;
+        return rows[0] ?? null;
+      });
+
+    const cloudStatus = () =>
+      Effect.gen(function* () {
+        const convex = yield* tryPromise(() => convexConnected());
+        const vercel = yield* tryPromise(() => vercelConnected());
+        yield* tryPromise(() =>
+          cloudLog(`cloudStatus convex=${convex} vercel=${vercel}`),
+        );
+        return { convex, vercel } satisfies CloudConnectionStatus;
+      });
+
+    /**
+     * Drive a device-flow login and stream its progress. Mirrors the Cursor
+     * login service: a Mailbox carries `url`/`log`/`done` events, and a scope
+     * finalizer aborts the child if the renderer unsubscribes (panel closed).
+     */
+    const connectVercel = (): Stream.Stream<ConnectEvent, Error> =>
+      Stream.unwrapScoped(
+        Effect.gen(function* () {
+          yield* tryPromise(() => cloudLog("=== connectVercel start"));
+          const mailbox = yield* Mailbox.make<ConnectEvent>();
+          const controller = new AbortController();
+          vercelLogin({
+            onUrl: (url) =>
+              mailbox.unsafeOffer({ type: "url", url, log: null, ok: false }),
+            onLog: (line) =>
+              mailbox.unsafeOffer({
+                type: "log",
+                url: null,
+                log: line,
+                ok: false,
+              }),
+            signal: controller.signal,
+          }).then(
+            () => {
+              mailbox.unsafeOffer({
+                type: "done",
+                url: null,
+                log: null,
+                ok: true,
+              });
+              void mailbox.end.pipe(Effect.runPromise);
+            },
+            (cause) => {
+              mailbox.unsafeOffer({
+                type: "done",
+                url: null,
+                log: cause instanceof Error ? cause.message : String(cause),
+                ok: false,
+              });
+              void mailbox.end.pipe(Effect.runPromise);
+            },
+          );
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => controller.abort()),
+          );
+          return Mailbox.toStream(mailbox) as Stream.Stream<ConnectEvent, Error>;
+        }),
+      );
+
+    const connectConvex = (
+      projectId: string,
+    ): Stream.Stream<ConnectEvent, Error> =>
+      Stream.unwrapScoped(
+        Effect.gen(function* () {
+          yield* tryPromise(() =>
+            cloudLog(`=== connectConvex start project=${projectId}`),
+          );
+          const root = yield* projectRoot(projectId);
+          const resolved = yield* tryPromise(() => resolveFrontend(root));
+          if (!resolved.exists) {
+            return Stream.fail(
+              new Error("This project has no frontend package."),
+            ) as Stream.Stream<ConnectEvent, Error>;
+          }
+          const pm = yield* tryPromise(() =>
+            detectPackageManager(resolved.frontendDir),
+          );
+          const mailbox = yield* Mailbox.make<ConnectEvent>();
+          const controller = new AbortController();
+          convexLogin({
+            frontendDir: resolved.frontendDir,
+            pm,
+            onUrl: (url) =>
+              mailbox.unsafeOffer({ type: "url", url, log: null, ok: false }),
+            onLog: (line) =>
+              mailbox.unsafeOffer({
+                type: "log",
+                url: null,
+                log: line,
+                ok: false,
+              }),
+            signal: controller.signal,
+          }).then(
+            () => {
+              mailbox.unsafeOffer({
+                type: "done",
+                url: null,
+                log: null,
+                ok: true,
+              });
+              void mailbox.end.pipe(Effect.runPromise);
+            },
+            (cause) => {
+              mailbox.unsafeOffer({
+                type: "done",
+                url: null,
+                log: cause instanceof Error ? cause.message : String(cause),
+                ok: false,
+              });
+              void mailbox.end.pipe(Effect.runPromise);
+            },
+          );
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => controller.abort()),
+          );
+          return Mailbox.toStream(mailbox) as Stream.Stream<ConnectEvent, Error>;
+        }),
+      );
+
     return {
       compile,
       deploy,
@@ -666,6 +1082,11 @@ export const MonadDeployServiceLive = Layer.effect(
       contractFunctions,
       contractRead,
       contractWrite,
+      cloudDeploy,
+      cloudStatus,
+      connectConvex,
+      connectVercel,
+      publishedUrl,
     };
   }),
 );
