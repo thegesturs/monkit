@@ -28,6 +28,19 @@ if (process.platform === "darwin" && app.isPackaged) {
   fixPath();
 }
 
+// In a packaged build the server's cwd/module paths sit inside app.asar, where
+// no `templates/` dir is reachable. Point its resolver (resolveTemplatesDir,
+// which checks MEMOIZE_TEMPLATES_DIR first) at the copy bundled via
+// extraResources (electron-builder.yml -> app/templates). Dev finds templates
+// relative to the repo, so this is packaged-only.
+if (app.isPackaged) {
+  process.env.MEMOIZE_TEMPLATES_DIR = Path.join(
+    process.resourcesPath,
+    "app",
+    "templates",
+  );
+}
+
 import { electronServerProtocolLayer } from "./ipc/electron-server-protocol.ts";
 import {
   DEFAULT_MENU_ACCELERATORS,

@@ -37,6 +37,13 @@ extraResources:
   - from: ../renderer/dist
     to: app/renderer/dist
     filter: ["**/*"]
+  # Project starter templates, copied at scaffold time by the server's
+  # WorkspaceService. main.ts points MEMOIZE_TEMPLATES_DIR here when packaged.
+  # The `**/.*` glob is required so each template's `.gitignore` ships — newly
+  # scaffolded projects need it.
+  - from: ../../templates
+    to: app/templates
+    filter: ["**/*", "**/.*"]
 
 # Native bindings can't load from inside an asar; they need to live as
 # real files on disk. electron-builder writes these to app.asar.unpacked/

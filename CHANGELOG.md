@@ -5,6 +5,11 @@ All notable changes to monkit will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1]
+
+### Fixed
+- Creating a new project from the bundled starter template no longer fails in the packaged DMG with "could not locate the templates directory." The `templates/` directory is now shipped inside the app via `extraResources`, and the packaged build points the server's template resolver at it (`MEMOIZE_TEMPLATES_DIR`). Dev builds are unaffected.
+
 ## [0.1.0] — monkit Beta
 
 First public beta under the **monkit** name.
