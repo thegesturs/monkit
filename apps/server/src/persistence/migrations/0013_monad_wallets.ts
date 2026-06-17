@@ -11,7 +11,7 @@ export const Migration0013MonadWallets = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
   yield* sql`
-    CREATE TABLE monad_wallets (
+    CREATE TABLE IF NOT EXISTS monad_wallets (
       id TEXT PRIMARY KEY,
       address TEXT NOT NULL UNIQUE,
       label TEXT,
@@ -22,10 +22,10 @@ export const Migration0013MonadWallets = Effect.gen(function* () {
   `;
 
   yield* sql`
-    CREATE INDEX idx_monad_wallets_address ON monad_wallets(address)
+    CREATE INDEX IF NOT EXISTS idx_monad_wallets_address ON monad_wallets(address)
   `;
 
   yield* sql`
-    CREATE INDEX idx_monad_wallets_project ON monad_wallets(project_id)
+    CREATE INDEX IF NOT EXISTS idx_monad_wallets_project ON monad_wallets(project_id)
   `;
 });

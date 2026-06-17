@@ -18,6 +18,7 @@ import { createAcpTranslator } from "./acp/translate.ts";
 import { applyPlanModePrefix } from "./planMode.ts";
 import { handleFsRequest } from "./acp/fs.ts";
 import { handleTerminalRequest } from "./acp/terminal.ts";
+import type { GetRuntimeMode, RequestPermission } from "./claude.ts";
 
 /**
  * Live-only handle for one Grok conversation. Mirrors Codex/Claude handle
@@ -99,7 +100,7 @@ const GROK_DIAG = process.env.MEMOIZE_DEBUG_GROK === "1" || process.env.MEMOIZE_
 // the slightly longer "Your cached login may have expired...") never diverge.
 export const GROK_AUTH_REQUIRED_MESSAGE =
   "Grok authentication failed (AuthorizationRequired). " +
-  "Run `grok login` again or verify that your account has the SuperGrok Heavy plan. " +
+  "Run `grok login` again or verify that your account has SuperGrok or X Premium+. " +
   "If the problem persists after logging in, check your plan at https://x.ai/.";
 
 /** Always-on diagnostic helper. Use for anything that helps root-cause "it stops". */
@@ -120,7 +121,7 @@ const grokDiag = (label: string, data?: unknown): void => {
 
 /**
  * Detect fatal authorization failures from the grok agent's own stderr.
- * When the cached token is missing/expired/insufficient (SuperGrok Heavy
+ * When the cached token is missing/expired/insufficient (Grok paid tier
  * tier required), the agent prints:
  *   "worker quit with fatal: Transport channel closed, when Auth(AuthorizationRequired)"
  * and dies. We watch for this in real time so we can fail the in-flight
@@ -230,6 +231,8 @@ export const startGrokSession = (
   apiKey: string | null,
   grokPath: string,
   sessionId: AgentSessionId,
+  requestPermission: RequestPermission,
+  getRuntimeMode: GetRuntimeMode,
   resumeCursor: string | null = null,
 ): Effect.Effect<GrokSessionHandle, AgentSessionStartError, AttachmentService> =>
   Effect.gen(function* () {
@@ -240,6 +243,23 @@ export const startGrokSession = (
     const events = yield* Mailbox.make<AgentEvent>();
 
     let currentMode: PermissionMode = input.permissionMode ?? "default";
+
+    // Shared context handed to the ACP fs/* and terminal/* handlers so file
+    // writes and command execution are gated through PermissionService +
+    // RuntimeMode, exactly like Claude/Codex. `currentMode` is read live so a
+    // mid-session mode toggle takes effect on the next tool call.
+    const acpHandlerContext = () => ({
+      cwd,
+      sessionId,
+      projectId: input.folderId,
+      requestPermission: (
+        kind: import("@memoize/wire").PermissionKind,
+        options: { readonly forcePrompt: boolean },
+      ) => requestPermission(sessionId, kind, options),
+      getRuntimeMode,
+      getPermissionMode: () => currentMode,
+    });
+
     let acpSessionId: string | null = null;
     let nextRpcId = 1;
     let closed = false;
@@ -281,7 +301,7 @@ export const startGrokSession = (
     let spawnedAt = 0;
     /** Re-spawn the grok child and re-run the ACP handshake. Used both for
      *  the initial start() path and for transparent recovery after the
-     *  worker dies (auth refresh races, the SuperGrok Heavy worker quitting
+     *  worker dies (auth refresh races, the Grok worker quitting
      *  mid-session, etc). On success: child/rl/acpSessionId/authMethodUsed
      *  are populated, dead=false, listeners attached. On failure the
      *  returned promise rejects and the caller decides whether to surface
@@ -433,7 +453,7 @@ export const startGrokSession = (
           if (isFs) {
             // Real FS support — the agent can now read/write files directly
             // instead of getting "Method not implemented" tool errors.
-            handleFsRequest(msg.method, msg.params, { cwd })
+            handleFsRequest(msg.method, msg.params, acpHandlerContext())
               .then((result) => {
                 writeMessage({ jsonrpc: "2.0", id: msg.id, result });
               })
@@ -449,7 +469,7 @@ export const startGrokSession = (
           }
 
           if (msg.method.startsWith("terminal/")) {
-            handleTerminalRequest(msg.method, msg.params, { cwd })
+            handleTerminalRequest(msg.method, msg.params, acpHandlerContext())
               .then((result) => {
                 writeMessage({ jsonrpc: "2.0", id: msg.id, result });
               })

@@ -1,10 +1,12 @@
 import type { EditorView } from "@codemirror/view";
 import {
+  Bolt,
   Check,
   ChevronDown,
   FolderClosed,
   GitBranch,
   Gauge,
+  Info,
   Lock,
   Map,
   Paperclip,
@@ -21,6 +23,7 @@ import {
 
 import {
   findModelDescriptor,
+  type BooleanOptionDescriptor,
   type Message,
   type PermissionMode,
   type PermissionRequest,
@@ -687,6 +690,11 @@ export function ChatComposer({ session }: { session: Session }) {
                   providerId={session.providerId}
                   model={session.model}
                 />
+                {findModelDescriptor(session.providerId, session.model)
+                  ?.optionDescriptors?.some(
+                    (d): d is BooleanOptionDescriptor =>
+                      d.kind === "boolean" && d.id === "fastMode",
+                  ) === true && <FastModeToggle sessionId={sessionId} />}
                 {(findModelDescriptor(session.providerId, session.model)
                   ?.supportsPlanMode ?? true) && (
                   <PlanModeToggle
@@ -814,6 +822,66 @@ function RuntimeModeToggle({
 }
 
 /**
+ * Claude Fast Mode is a boolean model option, persisted in the same
+ * per-session sessionStorage namespace the send path already reads.
+ */
+function FastModeToggle({ sessionId }: { sessionId: SessionId }) {
+  const storageKey = `memoize.modelOptions.${sessionId}.fastMode`;
+  const [enabled, setEnabled] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.sessionStorage.getItem(storageKey) === "true";
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      setEnabled(false);
+      return;
+    }
+    setEnabled(window.sessionStorage.getItem(storageKey) === "true");
+  }, [storageKey]);
+
+  const onClick = () => {
+    const next = !enabled;
+    setEnabled(next);
+    if (typeof window !== "undefined") {
+      if (next) {
+        window.sessionStorage.setItem(storageKey, "true");
+      } else {
+        window.sessionStorage.removeItem(storageKey);
+      }
+    }
+  };
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            onClick={onClick}
+            aria-label={
+              enabled ? "Disable Claude fast mode" : "Enable Claude fast mode"
+            }
+            aria-pressed={enabled}
+            className={cn(
+              "flex h-6 items-center gap-1.5 rounded-md px-2 text-[11px] transition-colors",
+              enabled
+                ? "bg-amber-300/15 text-amber-200 dark:text-amber-200 hover:bg-amber-300/25"
+                : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+            )}
+          >
+            <Bolt className="size-3.5" />
+            {enabled ? <span>Fast</span> : null}
+          </button>
+        }
+      />
+      <TooltipPopup>
+        {enabled ? "Disable Claude fast mode" : "Enable Claude fast mode"}
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
+/**
  * Binary plan-mode toggle. Off → just the map icon (tooltip explains).
  * On → map icon + "Plan" label with a peach accent so it pops next to
  * the other small chips. `Shift+Tab` from the composer flips the same
@@ -894,11 +962,15 @@ function ReasoningPicker({
 
   // For opencode, the variant list is per-model and lives on the live
   // inventory (`provider.list()` → `model.variants`). For other providers
-  // it's the static reasoning descriptor curated in `MODELS_BY_PROVIDER`.
+  // it's the static reasoning/effort descriptor curated in
+  // `MODELS_BY_PROVIDER`. Claude's descriptor is keyed `effort` (with
+  // tiers up through ultracode/ultrathink); everything else uses
+  // `reasoning`.
   const resolved = useMemo((): {
     label: string;
     options: ReadonlyArray<{ id: string; label: string }>;
     defaultId: string;
+    descriptorId: string;
   } | null => {
     if (providerId === "opencode") {
       if (opencodeInventory === null) return null;
@@ -914,29 +986,37 @@ function ReasoningPicker({
             : m.variants.includes("high")
               ? "high"
               : m.variants[0]!,
+          descriptorId: "reasoning",
         };
       }
       return null;
     }
     const descriptor = findModelDescriptor(providerId, model);
-    const reasoningDescriptor = descriptor?.optionDescriptors?.find(
+    const selectDescriptor = descriptor?.optionDescriptors?.find(
       (d): d is SelectOptionDescriptor =>
-        d.kind === "select" && d.id === "reasoning",
+        d.kind === "select" && (d.id === "reasoning" || d.id === "effort"),
     );
-    if (reasoningDescriptor === undefined) return null;
+    if (selectDescriptor === undefined) return null;
     return {
-      label: reasoningDescriptor.label,
-      options: reasoningDescriptor.options,
-      defaultId: reasoningDescriptor.defaultId ?? "medium",
+      label: selectDescriptor.label,
+      options: selectDescriptor.options,
+      defaultId: selectDescriptor.defaultId ?? "medium",
+      descriptorId: selectDescriptor.id,
     };
   }, [providerId, model, opencodeInventory]);
 
   const defaultId = resolved?.defaultId ?? "medium";
-  const storageKey = `memoize.reasoning.${sessionId}`;
+  const descriptorId = resolved?.descriptorId ?? "reasoning";
+  const storageKey = `memoize.modelOptions.${sessionId}.${descriptorId}`;
   const [level, setLevel] = useState<string>(() => {
     if (typeof window === "undefined") return defaultId;
     const stored = window.sessionStorage.getItem(storageKey);
     if (stored !== null) return stored;
+    // One-shot legacy migration so users mid-session keep their pick.
+    const legacy = window.sessionStorage.getItem(
+      `memoize.reasoning.${sessionId}`,
+    );
+    if (legacy !== null && legacy.length > 0) return legacy;
     return defaultId;
   });
 
@@ -953,16 +1033,27 @@ function ReasoningPicker({
   };
 
   const activeLabel = options.find((o) => o.id === level)?.label ?? level;
+  const isUltracode = level === "ultracode";
 
   return (
     <Menu>
       <MenuTrigger
-        className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-foreground hover:bg-muted/60 data-[popup-open]:bg-muted/60"
+        className={cn(
+          "flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] transition-colors data-[popup-open]:bg-muted/60",
+          isUltracode
+            ? "bg-gradient-to-r from-rose-400/90 via-amber-300/90 via-emerald-400/90 via-sky-400/90 to-violet-400/90 text-white shadow-sm/10 hover:opacity-95"
+            : "text-foreground hover:bg-muted/60",
+        )}
         aria-label={resolved.label}
-        title={`${resolved.label} for the next message`}
+        title={
+          isUltracode
+            ? "Ultracode — max reasoning + automatic workflow orchestration."
+            : `${resolved.label} for the next message`
+        }
       >
         <Gauge className="size-3" />
         <span>{activeLabel}</span>
+        {isUltracode && <Info className="size-3 opacity-90" aria-hidden />}
         <ChevronDown className="size-3 opacity-60" />
       </MenuTrigger>
       <MenuPopup side="top" align="start" className="w-44">

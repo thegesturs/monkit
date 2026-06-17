@@ -10,7 +10,7 @@ export const Migration0015MonadPublished = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
   yield* sql`
-    CREATE TABLE monad_published (
+    CREATE TABLE IF NOT EXISTS monad_published (
       project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
       url TEXT NOT NULL,
       deployment_url TEXT,
