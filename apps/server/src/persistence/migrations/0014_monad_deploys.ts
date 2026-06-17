@@ -8,7 +8,7 @@ export const Migration0014MonadDeploys = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
   yield* sql`
-    CREATE TABLE monad_deploys (
+    CREATE TABLE IF NOT EXISTS monad_deploys (
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
       network TEXT NOT NULL,
@@ -22,14 +22,14 @@ export const Migration0014MonadDeploys = Effect.gen(function* () {
   `;
 
   yield* sql`
-    CREATE INDEX idx_monad_deploys_project ON monad_deploys(project_id)
+    CREATE INDEX IF NOT EXISTS idx_monad_deploys_project ON monad_deploys(project_id)
   `;
 
   yield* sql`
-    CREATE INDEX idx_monad_deploys_network ON monad_deploys(network)
+    CREATE INDEX IF NOT EXISTS idx_monad_deploys_network ON monad_deploys(network)
   `;
 
   yield* sql`
-    CREATE INDEX idx_monad_deploys_address ON monad_deploys(address)
+    CREATE INDEX IF NOT EXISTS idx_monad_deploys_address ON monad_deploys(address)
   `;
 });

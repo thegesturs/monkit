@@ -1,12 +1,7 @@
 import { Rpc } from "@effect/rpc";
 import { Schema } from "effect";
 
-import {
-  AgentItemId,
-  AgentSessionId,
-  AgentTurnId,
-  FolderId,
-} from "./ids.ts";
+import { AgentItemId, AgentSessionId, AgentTurnId, FolderId } from "./ids.ts";
 
 /**
  * Identifier for a provider implementation (driver). v1 ships claude + codex;
@@ -51,11 +46,15 @@ export type AgentStatus = typeof AgentStatus.Type;
  *   - `approval-required` — prompt every write/Bash/Network/Task/MCP call.
  *   - `auto-accept-edits` — also auto-allow Edit / Write / MultiEdit /
  *     NotebookEdit. Bash / Network / Task / MCP still prompt.
- *   - `full-access` — auto-allow everything except sensitive paths.
+ *   - `auto-accept-edits-and-bash` — auto-allow file edits AND Bash. Network
+ *     (WebFetch / WebSearch) and MCP/Other still prompt.
+ *   - `full-access` — auto-allow everything except sensitive paths. Plan
+ *     mode (ExitPlanMode) ALWAYS prompts regardless of runtime mode.
  */
 export const RuntimeMode = Schema.Literal(
   "approval-required",
   "auto-accept-edits",
+  "auto-accept-edits-and-bash",
   "full-access",
 );
 export type RuntimeMode = typeof RuntimeMode.Type;
@@ -77,25 +76,34 @@ export const DEFAULT_RUNTIME_MODE: RuntimeMode = "approval-required";
  * switches `permissionMode` back to `default` and the existing `RuntimeMode`
  * resumes governing prompts.
  */
-export const PermissionMode = Schema.Literal(
-  "default",
-  "plan",
-  "acceptEdits",
-);
+export const PermissionMode = Schema.Literal("default", "plan", "acceptEdits");
 export type PermissionMode = typeof PermissionMode.Type;
 export const DEFAULT_PERMISSION_MODE: PermissionMode = "default";
 
 /**
  * Canonical reasoning effort levels exposed to the user. Providers map these
  * to their native concept:
- *   - Claude → `maxThinkingTokens` (low=5k, medium=15k, high=60k)
- *   - Codex → `reasoning_effort` enum (low/medium/high pass through)
+ *   - Claude → `maxThinkingTokens` (low=5k, medium=15k, high=60k) + SDK
+ *     `effort` enum (low/medium/high/xhigh/max). `ultracode` is a Claude
+ *     Code preset that normalizes to `xhigh` + `settings.ultracode: true`.
+ *     `ultrathink` is prompt-injected (the literal word is prepended to the
+ *     user prompt); SDK `effort` stays unset.
+ *   - Codex → `reasoning_effort` enum (low/medium/high pass through; higher
+ *     tiers fall back to `high`).
  *   - Gemini Pro → `thinkingConfig.thinkingBudget` (low=4k, medium=16k, high=32k)
  *
  * Providers/models that don't support thinking simply omit the descriptor
  * from `ModelDescriptor.optionDescriptors`, which hides the FE picker.
  */
-export const ReasoningLevel = Schema.Literal("low", "medium", "high");
+export const ReasoningLevel = Schema.Literal(
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultracode",
+  "ultrathink",
+);
 export type ReasoningLevel = typeof ReasoningLevel.Type;
 
 /**
@@ -111,6 +119,14 @@ export const SelectOptionDescriptor = Schema.Struct({
     Schema.Struct({ id: Schema.String, label: Schema.String }),
   ),
   defaultId: Schema.optional(Schema.String),
+  /**
+   * Option ids in this list are *prompt-injected* rather than forwarded to
+   * the SDK as a knob value. The driver prepends the option id (e.g. the
+   * literal word `"ultrathink"`) to the user prompt and unsets the
+   * underlying SDK field. Used by Claude's `effort` descriptor for the
+   * `ultrathink` tier.
+   */
+  promptInjectedValues: Schema.optional(Schema.Array(Schema.String)),
 });
 export type SelectOptionDescriptor = typeof SelectOptionDescriptor.Type;
 
@@ -141,6 +157,24 @@ export type OptionDescriptor = typeof OptionDescriptor.Type;
  */
 export const CliVersionStatus = Schema.Literal("ok", "outdated", "unknown");
 export type CliVersionStatus = typeof CliVersionStatus.Type;
+
+/**
+ * Per-provider verdict on whether a *newer published release* exists, distinct
+ * from {@link CliVersionStatus} (which is the blocking SDK floor). This layer
+ * is purely informational — it powers the "update available" hover affordance
+ * in settings and the launch toast, and never blocks a session.
+ *
+ *   - `current` — installed version is at or ahead of the latest published
+ *   - `behind` — a newer version is published (`latestVersion` carries it)
+ *   - `unknown` — couldn't reach the registry, parse failed, or the provider
+ *     isn't published to a registry we check (e.g. curl-installed CLIs)
+ */
+export const LatestVersionStatus = Schema.Literal(
+  "current",
+  "behind",
+  "unknown",
+);
+export type LatestVersionStatus = typeof LatestVersionStatus.Type;
 
 /**
  * Server-side verdict on whether a provider is usable right now. Distinct
@@ -210,6 +244,25 @@ export const AgentAvailability = Schema.Struct({
    * own per-provider install lookup.
    */
   cliUpgradeCommand: Schema.optional(Schema.String),
+  /**
+   * Latest version published to the registry (e.g. `"1.0.140"`), when we were
+   * able to resolve one. Set in tandem with `latestVersionStatus`.
+   */
+  latestVersion: Schema.optional(Schema.String),
+  /**
+   * Verdict on whether a newer published release exists. Drives the
+   * informational "update available" UI (hover icon + launch toast) — never
+   * blocks a session. `"unknown"` for providers we don't version-check (no
+   * registry package) or when the registry lookup failed.
+   */
+  latestVersionStatus: Schema.optional(LatestVersionStatus),
+  /**
+   * Copy-able one-liner the user can run to update to the latest published
+   * release (e.g. `"npm i -g @openai/codex@latest"`). Distinct from
+   * `cliUpgradeCommand` (which targets the blocking SDK floor) — though they
+   * often coincide.
+   */
+  updateCommand: Schema.optional(Schema.String),
   /**
    * Verified auth state. Distinct from `cliLoggedIn` (which only checks for
    * a credential file): set when an out-of-process probe (Codex
@@ -586,11 +639,21 @@ export interface ModelOption {
   readonly optionDescriptors?: ReadonlyArray<OptionDescriptor>;
   readonly supportsPlanMode?: boolean;
   readonly supportsWebSearch?: "native" | "queryOnly";
+  /**
+   * When set, the renderer renders a rainbow "Ultracode" chip + info icon on
+   * this model's picker row, and the composer footer surfaces an Ultracode
+   * toggle pill. Server-side, picking this model defaults
+   * `modelOptions.effort = "ultracode"`, which the Claude driver normalizes
+   * to `effort: "xhigh"` + `settings.ultracode: true` on the SDK options.
+   * Today only Opus 4.8 advertises this.
+   */
+  readonly ultracode?: { readonly available: true };
 }
 
 /**
- * Standard reasoning-level descriptor reused across providers that support
- * thinking. Keep id/options aligned with `ReasoningLevel`.
+ * Standard 3-level reasoning descriptor for Codex/Gemini/Cursor and the
+ * `reasoning` knob name used across non-Claude providers. Keep id/options
+ * aligned with `ReasoningLevel`.
  */
 const reasoningSelectDescriptor = (
   defaultId: ReasoningLevel = "medium",
@@ -606,25 +669,160 @@ const reasoningSelectDescriptor = (
   defaultId,
 });
 
-export const MODELS_BY_PROVIDER: Record<ProviderId, ReadonlyArray<ModelOption>> = {
+/**
+ * Per-model effort descriptor for the Claude provider. Each model declares
+ * its own supported tiers (see `MODELS_BY_PROVIDER.claude` below); `ultracode`
+ * and `ultrathink` are special — see `ReasoningLevel` docs. The knob id is
+ * `effort` (matching the Claude SDK + t3code reference) rather than
+ * `reasoning` to make driver-side mapping explicit.
+ */
+const claudeEffortDescriptor = (args: {
+  options: ReadonlyArray<{ id: string; label: string }>;
+  defaultId: string;
+  promptInjectedValues?: ReadonlyArray<string>;
+}): SelectOptionDescriptor => ({
+  kind: "select",
+  id: "effort",
+  label: "Reasoning",
+  options: args.options,
+  defaultId: args.defaultId,
+  ...(args.promptInjectedValues !== undefined
+    ? { promptInjectedValues: args.promptInjectedValues }
+    : {}),
+});
+
+/**
+ * Boolean descriptor for Claude's per-model toggles. `fastMode` halves the
+ * token cost and roughly doubles throughput at the cost of some quality;
+ * `thinking` enables Haiku 4.5's always-on adaptive thinking.
+ */
+const claudeBooleanDescriptor = (
+  id: string,
+  label: string,
+): BooleanOptionDescriptor => ({
+  kind: "boolean",
+  id,
+  label,
+});
+
+/**
+ * Standard `contextWindow` descriptor used by every Claude 4.x model that
+ * supports the 1M variant. Driver-side, picking `"1m"` rewrites the API
+ * model id to `${slug}[1m]`. We default to `"1m"` because Anthropic now
+ * routes most Claude 4.x sessions to the 1M window by default.
+ */
+const claudeContextWindowDescriptor = (): SelectOptionDescriptor => ({
+  kind: "select",
+  id: "contextWindow",
+  label: "Context Window",
+  options: [
+    { id: "200k", label: "200k" },
+    { id: "1m", label: "1M" },
+  ],
+  defaultId: "1m",
+});
+
+export const MODELS_BY_PROVIDER: Record<
+  ProviderId,
+  ReadonlyArray<ModelOption>
+> = {
+  // Claude 4.x catalog (May 2026). Effort tiers and per-model knobs match
+  // the published Claude Agent SDK contract — see also the t3code reference
+  // (`/Users/whizzy/Developer/temp/t3code/.../ClaudeProvider.ts`) which
+  // ships the same lineup. Ordering = newest first so the picker accordion
+  // expands Opus 4.8 by default.
   claude: [
+    {
+      id: "claude-opus-4-8",
+      label: "Opus 4.8",
+      optionDescriptors: [
+        claudeEffortDescriptor({
+          options: [
+            { id: "low", label: "Low" },
+            { id: "medium", label: "Medium" },
+            { id: "high", label: "High" },
+            { id: "xhigh", label: "Extra High" },
+            { id: "max", label: "Max" },
+            { id: "ultracode", label: "Ultracode" },
+            { id: "ultrathink", label: "Ultrathink" },
+          ],
+          defaultId: "high",
+          promptInjectedValues: ["ultrathink"],
+        }),
+        claudeBooleanDescriptor("fastMode", "Fast Mode"),
+        claudeContextWindowDescriptor(),
+      ],
+      supportsPlanMode: true,
+      supportsWebSearch: "native",
+      ultracode: { available: true },
+    },
     {
       id: "claude-opus-4-7",
       label: "Opus 4.7",
-      optionDescriptors: [reasoningSelectDescriptor("high")],
+      optionDescriptors: [
+        claudeEffortDescriptor({
+          options: [
+            { id: "low", label: "Low" },
+            { id: "medium", label: "Medium" },
+            { id: "high", label: "High" },
+            { id: "xhigh", label: "Extra High" },
+            { id: "max", label: "Max" },
+            { id: "ultrathink", label: "Ultrathink" },
+          ],
+          defaultId: "xhigh",
+          promptInjectedValues: ["ultrathink"],
+        }),
+        claudeBooleanDescriptor("fastMode", "Fast Mode"),
+        claudeContextWindowDescriptor(),
+      ],
+      supportsPlanMode: true,
+      supportsWebSearch: "native",
+    },
+    {
+      id: "claude-opus-4-6",
+      label: "Opus 4.6",
+      optionDescriptors: [
+        claudeEffortDescriptor({
+          options: [
+            { id: "low", label: "Low" },
+            { id: "medium", label: "Medium" },
+            { id: "high", label: "High" },
+            { id: "max", label: "Max" },
+            { id: "ultrathink", label: "Ultrathink" },
+          ],
+          defaultId: "high",
+          promptInjectedValues: ["ultrathink"],
+        }),
+        claudeBooleanDescriptor("fastMode", "Fast Mode"),
+        claudeContextWindowDescriptor(),
+      ],
       supportsPlanMode: true,
       supportsWebSearch: "native",
     },
     {
       id: "claude-sonnet-4-6",
       label: "Sonnet 4.6",
-      optionDescriptors: [reasoningSelectDescriptor("medium")],
+      optionDescriptors: [
+        claudeEffortDescriptor({
+          options: [
+            { id: "low", label: "Low" },
+            { id: "medium", label: "Medium" },
+            { id: "high", label: "High" },
+            { id: "max", label: "Max" },
+            { id: "ultrathink", label: "Ultrathink" },
+          ],
+          defaultId: "high",
+          promptInjectedValues: ["ultrathink"],
+        }),
+        claudeContextWindowDescriptor(),
+      ],
       supportsPlanMode: true,
       supportsWebSearch: "native",
     },
     {
       id: "claude-haiku-4-5",
       label: "Haiku 4.5",
+      optionDescriptors: [claudeBooleanDescriptor("thinking", "Thinking")],
       supportsPlanMode: true,
       supportsWebSearch: "native",
     },
@@ -661,15 +859,20 @@ export const MODELS_BY_PROVIDER: Record<ProviderId, ReadonlyArray<ModelOption>> 
   ],
   // Seed list — Grok CLI's `-m` flag accepts any model id it knows, so a
   // custom slug typed by the user still works; this list is just what the
-  // picker shows by default. `grok-build` is the only model free-tier
-  // accounts can run (verified via `grok models`); the rest unlock with a
-  // SuperGrok subscription. Passing a slug the account can't access yields
+  // picker shows by default. `grok-build` unlocks with a paid Grok entitlement
+  // such as SuperGrok or X Premium+. Passing a slug the account can't access yields
   // a clean 403 surfaced through grok's streaming-json `type: "error"`
   // envelope, so no client-side validation needed.
   grok: [
     {
       id: "grok-build",
       label: "Grok Build",
+      supportsPlanMode: true,
+      supportsWebSearch: "queryOnly",
+    },
+    {
+      id: "grok-composer-2.5-fast",
+      label: "Grok Composer 2.5 Fast",
       supportsPlanMode: true,
       supportsWebSearch: "queryOnly",
     },
@@ -798,8 +1001,29 @@ export const findModelDescriptor = (
  * persisted user settings and incoming requests through this map so existing
  * sessions don't crash.
  */
-export const MODEL_ALIASES_BY_PROVIDER: Record<ProviderId, Record<string, string>> = {
-  claude: {},
+export const MODEL_ALIASES_BY_PROVIDER: Record<
+  ProviderId,
+  Record<string, string>
+> = {
+  // Short / vendor-formatted slugs and pre-pricing-reset names route to the
+  // canonical 4.x slugs above. Mirror of t3code's
+  // `MODEL_SLUG_ALIASES_BY_PROVIDER[CLAUDE_DRIVER_KIND]` so a user typing
+  // `opus` or `sonnet-4.6` resolves the same in both apps.
+  claude: {
+    opus: "claude-opus-4-8",
+    "opus-4.8": "claude-opus-4-8",
+    "claude-opus-4.8": "claude-opus-4-8",
+    "opus-4.7": "claude-opus-4-7",
+    "claude-opus-4.7": "claude-opus-4-7",
+    "opus-4.6": "claude-opus-4-6",
+    "claude-opus-4.6": "claude-opus-4-6",
+    sonnet: "claude-sonnet-4-6",
+    "sonnet-4.6": "claude-sonnet-4-6",
+    "claude-sonnet-4.6": "claude-sonnet-4-6",
+    haiku: "claude-haiku-4-5",
+    "haiku-4.5": "claude-haiku-4-5",
+    "claude-haiku-4.5": "claude-haiku-4-5",
+  },
   codex: {
     "gpt-5-codex": "gpt-5.4",
     "gpt-5": "gpt-5.4",
@@ -838,13 +1062,15 @@ export const MODEL_ALIASES_BY_PROVIDER: Record<ProviderId, Record<string, string
     "gpt-5.4-high": "gpt-5.4",
     "gpt-5.4-high-fast": "gpt-5.4",
     "gpt-5.3-codex-fast": "gpt-5.3-codex",
-    "auto": "default",
+    auto: "default",
   },
   opencode: {},
 };
 
-export const resolveModelSlug = (providerId: ProviderId, slug: string): string =>
-  MODEL_ALIASES_BY_PROVIDER[providerId][slug] ?? slug;
+export const resolveModelSlug = (
+  providerId: ProviderId,
+  slug: string,
+): string => MODEL_ALIASES_BY_PROVIDER[providerId][slug] ?? slug;
 
 /**
  * Per-million-token USD pricing used by the renderer to compute the
@@ -860,9 +1086,41 @@ export interface ModelPricing {
 }
 
 export const MODEL_PRICING: Record<string, ModelPricing> = {
-  "claude-opus-4-7": { input: 15, output: 75, cacheRead: 1.5, cacheCreate: 18.75 },
-  "claude-sonnet-4-6": { input: 3, output: 15, cacheRead: 0.3, cacheCreate: 3.75 },
-  "claude-haiku-4-5": { input: 1, output: 5, cacheRead: 0.1, cacheCreate: 1.25 },
+  // 2026-05 Anthropic pricing reset — every Opus 4.x tier landed at the
+  // same $5/$25 per-million numbers. `fastMode` (Opus only) doubles those
+  // to $10 in / $50 out for ~2.5x throughput; we don't encode that here,
+  // the renderer's cost footer applies the multiplier when the session
+  // flips the boolean. 1M context window: no per-token premium.
+  "claude-opus-4-8": {
+    input: 5,
+    output: 25,
+    cacheRead: 0.5,
+    cacheCreate: 6.25,
+  },
+  "claude-opus-4-7": {
+    input: 5,
+    output: 25,
+    cacheRead: 0.5,
+    cacheCreate: 6.25,
+  },
+  "claude-opus-4-6": {
+    input: 5,
+    output: 25,
+    cacheRead: 0.5,
+    cacheCreate: 6.25,
+  },
+  "claude-sonnet-4-6": {
+    input: 3,
+    output: 15,
+    cacheRead: 0.3,
+    cacheCreate: 3.75,
+  },
+  "claude-haiku-4-5": {
+    input: 1,
+    output: 5,
+    cacheRead: 0.1,
+    cacheCreate: 1.25,
+  },
 };
 
 export const SendInput = Schema.Struct({
@@ -1045,6 +1303,31 @@ export type LoginEvent = typeof LoginEvent.Type;
 export const AgentStartLoginRpc = Rpc.make("agent.startLogin", {
   payload: Schema.Struct({ providerId: ProviderId }),
   success: LoginEvent,
+  error: AgentSessionStartError,
+  stream: true,
+});
+
+// ---------------------------------------------------------------------------
+// One-click provider CLI update. The renderer subscribes to
+// `agent.updateProvider`, which spawns the provider's install/upgrade command
+// in a login shell (so `npm`/`bun` are on PATH and `curl … | bash` installers
+// work), streams the command's output back as `log` lines, and ends with a
+// terminal `done`. On success the renderer re-probes availability so the new
+// version is reflected immediately.
+// ---------------------------------------------------------------------------
+
+export const ProviderUpdateEvent = Schema.Union(
+  Schema.TaggedStruct("log", { text: Schema.String }),
+  Schema.TaggedStruct("done", {
+    ok: Schema.Boolean,
+    reason: Schema.optional(Schema.String),
+  }),
+);
+export type ProviderUpdateEvent = typeof ProviderUpdateEvent.Type;
+
+export const AgentUpdateProviderRpc = Rpc.make("agent.updateProvider", {
+  payload: Schema.Struct({ providerId: ProviderId }),
+  success: ProviderUpdateEvent,
   error: AgentSessionStartError,
   stream: true,
 });
