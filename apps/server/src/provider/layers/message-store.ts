@@ -10,6 +10,7 @@ import {
   ChatArchiveWorktreeError,
   type ChatId,
   ChatNotFoundError,
+  ComposerInput,
   DEFAULT_PERMISSION_MODE,
   DEFAULT_RUNTIME_MODE,
   Message,
@@ -18,28 +19,38 @@ import {
   SessionAlreadyStartedError,
   type AgentDefinition,
   type AgentEvent,
+  AgentSessionNotFoundError,
   type AttachmentRef,
+  type CodeAnnotation,
   type FileRef,
   type FolderId,
+  GoalUnsupportedError,
   type MessageContent,
   type MessageId as MessageIdType,
   type MessageRole,
   type ProviderId,
+  QueuedMessage,
   type RuntimeMode,
   Session,
   SessionId,
   SessionNotFoundError,
   SessionStartError,
   type SkillRef,
+  ThreadGoal,
+  type ThreadGoalSetInput,
   type Worktree,
   WorktreeId,
 } from "@memoize/wire";
 
 import { WorktreeService } from "../../worktree/services/worktree-service.ts";
 
+import { ConfigStoreService } from "../../config-store/services/config-store-service.ts";
+import { GitService } from "../../git/services/git-service.ts";
 import { NdjsonLogger } from "../../persistence/ndjson-logger.ts";
 import { PtyService } from "../../pty/services/pty-service.ts";
 import { RepositorySettingsService } from "../../repository-settings/services/repository-settings-service.ts";
+import { TitleGenerator, formatBranchName } from "../title-generator.ts";
+import { isIgnorableGrokAuthNoise } from "../drivers/acp/grok-auth-noise.ts";
 import {
   MessageStore,
   type CreateChatInput,
@@ -81,6 +92,8 @@ interface ChatRow {
   readonly active_session_id: string | null;
   readonly archived_at: string | null;
   readonly archived_worktree_json: string | null;
+  readonly last_message_at: string | null;
+  readonly last_read_at: string | null;
   readonly created_at: string;
   readonly updated_at: string;
 }
@@ -93,7 +106,7 @@ const SESSION_COLUMNS =
 
 const CHAT_COLUMNS =
   "id, project_id, worktree_id, title, active_session_id, " +
-  "archived_at, archived_worktree_json, created_at, updated_at";
+  "archived_at, archived_worktree_json, last_message_at, last_read_at, created_at, updated_at";
 
 const ARCHIVE_SCRIPT_TIMEOUT_MS = 10 * 60 * 1000;
 const ARCHIVE_OUTPUT_LIMIT = 12_000;
@@ -188,6 +201,15 @@ interface MessageRow {
   readonly created_at: string;
 }
 
+interface QueuedMessageRow {
+  readonly id: string;
+  readonly session_id: string;
+  readonly queue_order: number;
+  readonly input_json: string;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
 const sessionFromRow = (row: SessionRow): Session =>
   Session.make({
     id: SessionId.make(row.id),
@@ -238,6 +260,9 @@ const chatFromRow = (row: ChatRow): Chat =>
         ? null
         : SessionId.make(row.active_session_id),
     archivedAt: row.archived_at === null ? null : new Date(row.archived_at),
+    lastMessageAt:
+      row.last_message_at === null ? null : new Date(row.last_message_at),
+    lastReadAt: row.last_read_at === null ? null : new Date(row.last_read_at),
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   });
@@ -252,6 +277,16 @@ const messageFromRow = (row: MessageRow): Message => {
     createdAt: new Date(row.created_at),
   });
 };
+
+const queuedMessageFromRow = (row: QueuedMessageRow): QueuedMessage =>
+  QueuedMessage.make({
+    id: row.id,
+    sessionId: SessionId.make(row.session_id),
+    input: ComposerInput.make(JSON.parse(row.input_json)),
+    position: row.queue_order,
+    createdAt: new Date(row.created_at),
+    updatedAt: new Date(row.updated_at),
+  });
 
 /**
  * Pull `parentItemId` off a content payload for the dedicated SQL column.
@@ -268,6 +303,9 @@ const parentItemIdOfContent = (content: MessageContent): string | null => {
     case "user_question":
     case "user_question_answer":
       return content.parentItemId ?? null;
+    case "context_usage":
+    case "usage_limit":
+      return null;
     case "subagent_summary":
       // The summary row IS the wrapper; it sits at the top level next to
       // its `Agent` tool_use. No parent.
@@ -293,6 +331,8 @@ const roleForContent = (content: MessageContent): MessageRole => {
       return "tool";
     case "error":
     case "usage":
+    case "context_usage":
+    case "usage_limit":
       return "system";
   }
 };
@@ -356,6 +396,24 @@ const eventToContent = (event: AgentEvent): MessageContent | null => {
         cacheCreationTokens: event.cacheCreationTokens,
         model: event.model,
       };
+    case "ContextUsage":
+      return {
+        _tag: "context_usage",
+        providerId: event.providerId,
+        usedTokens: event.usedTokens,
+        windowTokens: event.windowTokens,
+        precision: event.precision,
+        source: event.source,
+      };
+    case "UsageLimit":
+      return {
+        _tag: "usage_limit",
+        providerId: event.providerId,
+        label: event.label,
+        usedPercent: event.usedPercent,
+        resetsAt: event.resetsAt,
+        windowMinutes: event.windowMinutes,
+      };
     case "Error":
       return { _tag: "error", message: event.message };
     case "UserQuestion":
@@ -380,6 +438,25 @@ const titleFromInitial = (prompt: string | undefined): string => {
   const firstLine = prompt.trim().split("\n")[0] ?? "";
   const truncated = firstLine.slice(0, 60).trim();
   return truncated.length > 0 ? truncated : "New chat";
+};
+
+/**
+ * Render stacked code annotations into the numbered list the model receives.
+ * Each entry is `path:lineRange — comment`; the agent's cwd is the workspace
+ * root, so the relative path resolves when it reads the file. Pure string fn —
+ * no I/O.
+ */
+const serializeAnnotations = (
+  annotations: ReadonlyArray<CodeAnnotation>,
+): string => {
+  const lines = annotations.map((a, i) => {
+    const range =
+      a.startLine === a.endLine
+        ? `${a.startLine}`
+        : `${a.startLine}-${a.endLine}`;
+    return `${i + 1}. ${a.relPath}:${range} — ${a.comment}`;
+  });
+  return ["Code annotations:", ...lines].join("\n");
 };
 
 const formatProviderFailure = (cause: unknown): string => {
@@ -422,6 +499,9 @@ export const MessageStoreLive = Layer.scoped(
     const worktrees = yield* WorktreeService;
     const repositorySettings = yield* RepositorySettingsService;
     const ptys = yield* PtyService;
+    const git = yield* GitService;
+    const titleGen = yield* TitleGenerator;
+    const configStore = yield* ConfigStoreService;
 
     const chatColumns = yield* sql<{ readonly name: string }>`
       PRAGMA table_info(chats)
@@ -581,13 +661,6 @@ export const MessageStoreLive = Layer.scoped(
       }
     >();
 
-    /**
-     * Tracks consecutive times a Grok session died because the internal
-     * agent worker rejected the `cached_token` from `grok login`.
-     * Used to stop hammering restarts when local auth is having issues
-     * with the full coding agent.
-     */
-    const grokAuthWorkerDeathCount = new Map<SessionId, number>();
     const ndjsonAppend = (
       sessionId: SessionId,
       message: Message,
@@ -628,6 +701,35 @@ export const MessageStoreLive = Layer.scoped(
     const statusPubsubs = yield* Ref.make<
       ReadonlyMap<SessionId, PubSub.PubSub<StatusEvent>>
     >(new Map());
+    const queuePubsubs = yield* Ref.make<
+      ReadonlyMap<SessionId, PubSub.PubSub<ReadonlyArray<QueuedMessage>>>
+    >(new Map());
+    const goalPubsubs = yield* Ref.make<
+      ReadonlyMap<
+        SessionId,
+        PubSub.PubSub<{
+          readonly sessionId: SessionId;
+          readonly goal: ThreadGoal | null;
+        }>
+      >
+    >(new Map());
+    const goalsBySession = new Map<string, ThreadGoal | null>();
+
+    // Single hub for chat-row changes (title / worktree binding). Unlike the
+    // per-session message/status pubsubs, chats are few and updates rare, so
+    // one project-filtered hub keeps it simple. The renderer already holds
+    // the chat list via `chat.list`; this stream only carries live patches
+    // (e.g. the background auto-namer rewriting a title), so there's no
+    // backfill on subscribe.
+    const chatChangesHub = yield* PubSub.unbounded<Chat>();
+    const broadcastChat = (chat: Chat): Effect.Effect<void> =>
+      PubSub.publish(chatChangesHub, chat).pipe(Effect.asVoid);
+
+    // Chats whose first-message auto-name is in flight, so a second message
+    // arriving mid-rename can't kick off a duplicate pass. One-shot per chat
+    // per process — entries are never removed because the triggering hooks
+    // only fire on the first user message anyway.
+    const autoNamingChats = new Set<string>();
 
     const getOrMakePubsub = (sessionId: SessionId) =>
       Effect.gen(function* () {
@@ -655,6 +757,71 @@ export const MessageStoreLive = Layer.scoped(
           return next;
         });
         return pubsub;
+      });
+
+    const getOrMakeQueuePubsub = (sessionId: SessionId) =>
+      Effect.gen(function* () {
+        const map = yield* Ref.get(queuePubsubs);
+        const existing = map.get(sessionId);
+        if (existing !== undefined) return existing;
+        const pubsub = yield* PubSub.unbounded<ReadonlyArray<QueuedMessage>>();
+        yield* Ref.update(queuePubsubs, (m) => {
+          const next = new Map(m);
+          next.set(sessionId, pubsub);
+          return next;
+        });
+        return pubsub;
+      });
+
+    const getOrMakeGoalPubsub = (sessionId: SessionId) =>
+      Effect.gen(function* () {
+        const map = yield* Ref.get(goalPubsubs);
+        const existing = map.get(sessionId);
+        if (existing !== undefined) return existing;
+        const pubsub = yield* PubSub.unbounded<{
+          readonly sessionId: SessionId;
+          readonly goal: ThreadGoal | null;
+        }>();
+        yield* Ref.update(goalPubsubs, (m) => {
+          const next = new Map(m);
+          next.set(sessionId, pubsub);
+          return next;
+        });
+        return pubsub;
+      });
+
+    const publishGoal = (
+      sessionId: SessionId,
+      goal: ThreadGoal | null,
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        goalsBySession.set(sessionId, goal);
+        const pubsub = yield* getOrMakeGoalPubsub(sessionId);
+        yield* PubSub.publish(pubsub, { sessionId, goal }).pipe(Effect.asVoid);
+      });
+
+    const latestGoalUserMessageMatches = (
+      sessionId: SessionId,
+      text: string,
+    ): Effect.Effect<boolean> =>
+      Effect.gen(function* () {
+        const rows = yield* sql<{ readonly content_json: string }>`
+          SELECT content_json FROM messages
+          WHERE session_id = ${sessionId} AND role = 'user'
+          ORDER BY created_at DESC
+          LIMIT 1
+        `.pipe(Effect.orDie);
+        const raw = rows[0]?.content_json;
+        if (raw === undefined) return false;
+        try {
+          const content = JSON.parse(raw) as MessageContent;
+          if (content._tag !== "user" && content._tag !== "user_rich") {
+            return false;
+          }
+          return content.goal === true && content.text.trim() === text.trim();
+        } catch {
+          return false;
+        }
       });
 
     const lookupSession = (
@@ -714,6 +881,13 @@ export const MessageStoreLive = Layer.scoped(
         yield* sql`
           UPDATE sessions SET updated_at = ${nowIso} WHERE id = ${sessionId}
         `.pipe(Effect.orDie);
+        // Advance the owning chat's activity clock so the sidebar can mark it
+        // unread. `updated_at` (and sidebar ordering) is intentionally left
+        // untouched — `last_message_at` is a separate read/unread signal.
+        yield* sql`
+          UPDATE chats SET last_message_at = ${nowIso}
+          WHERE id = (SELECT chat_id FROM sessions WHERE id = ${sessionId})
+        `.pipe(Effect.orDie);
         return Message.make({
           id,
           sessionId,
@@ -722,6 +896,11 @@ export const MessageStoreLive = Layer.scoped(
           createdAt: now,
         });
       });
+
+    const flushingQueues = yield* Ref.make<ReadonlySet<SessionId>>(new Set());
+    let flushQueueAfterIdle: (
+      sessionId: SessionId,
+    ) => Effect.Effect<void> = () => Effect.void;
 
     const setStatus = (
       sessionId: SessionId,
@@ -734,6 +913,9 @@ export const MessageStoreLive = Layer.scoped(
         `.pipe(Effect.asVoid, Effect.orDie);
         const pubsub = yield* getOrMakeStatusPubsub(sessionId);
         yield* PubSub.publish(pubsub, { sessionId, status });
+        if (status === "idle" || status === "closed") {
+          yield* Effect.forkDaemon(flushQueueAfterIdle(sessionId));
+        }
       });
 
     const broadcastMessage = (
@@ -743,6 +925,83 @@ export const MessageStoreLive = Layer.scoped(
       Effect.gen(function* () {
         const pubsub = yield* getOrMakePubsub(sessionId);
         yield* PubSub.publish(pubsub, message);
+      });
+
+    const ensureQueuedMessagesSchema: Effect.Effect<void> = Effect.gen(
+      function* () {
+        yield* sql`
+          CREATE TABLE IF NOT EXISTS queued_messages (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            queue_order INTEGER NOT NULL,
+            input_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          )
+        `.pipe(Effect.orDie);
+
+        const columns = yield* sql<{ readonly name: string }>`
+          PRAGMA table_info(queued_messages)
+        `.pipe(Effect.orDie);
+        const hasColumn = (name: string): boolean =>
+          columns.some((column) => column.name === name);
+
+        if (!hasColumn("queue_order")) {
+          yield* sql`
+            ALTER TABLE queued_messages
+              ADD COLUMN queue_order INTEGER NOT NULL DEFAULT 0
+          `.pipe(Effect.orDie);
+          if (hasColumn("position")) {
+            yield* sql`
+              UPDATE queued_messages SET queue_order = "position"
+            `.pipe(Effect.orDie);
+          }
+        }
+
+        yield* sql`
+          CREATE INDEX IF NOT EXISTS idx_queued_messages_session_queue_order
+          ON queued_messages(session_id, queue_order)
+        `.pipe(Effect.orDie);
+      },
+    );
+
+    const listQueuedRows = (
+      sessionId: SessionId,
+    ): Effect.Effect<ReadonlyArray<QueuedMessage>> =>
+      Effect.gen(function* () {
+        yield* ensureQueuedMessagesSchema;
+        const rows = yield* sql<QueuedMessageRow>`
+          SELECT id, session_id, queue_order, input_json, created_at, updated_at
+          FROM queued_messages
+          WHERE session_id = ${sessionId}
+          ORDER BY queue_order ASC, created_at ASC
+        `.pipe(Effect.orDie);
+        return rows.map(queuedMessageFromRow);
+      });
+
+    const broadcastQueue = (sessionId: SessionId): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const items = yield* listQueuedRows(sessionId);
+        const pubsub = yield* getOrMakeQueuePubsub(sessionId);
+        yield* PubSub.publish(pubsub, items);
+      });
+
+    const normalizeQueuePositions = (
+      sessionId: SessionId,
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        yield* ensureQueuedMessagesSchema;
+        const rows = yield* sql<{ readonly id: string }>`
+          SELECT id FROM queued_messages
+          WHERE session_id = ${sessionId}
+          ORDER BY queue_order ASC, created_at ASC
+        `.pipe(Effect.orDie);
+        for (let i = 0; i < rows.length; i += 1) {
+          yield* sql`
+            UPDATE queued_messages SET queue_order = ${i}
+            WHERE id = ${rows[i]!.id} AND session_id = ${sessionId}
+          `.pipe(Effect.orDie);
+        }
       });
 
     /**
@@ -755,6 +1014,7 @@ export const MessageStoreLive = Layer.scoped(
      */
     const startSubscription = (sessionId: SessionId): Effect.Effect<void> =>
       Effect.gen(function* () {
+        const session = yield* lookupSession(sessionId).pipe(Effect.orDie);
         const fiber = yield* Effect.forkDaemon(
           Stream.runForEach(provider.events(sessionId), (event) =>
             Effect.gen(function* () {
@@ -798,6 +1058,21 @@ export const MessageStoreLive = Layer.scoped(
                   WHERE id = ${sessionId}
                 `.pipe(Effect.asVoid, Effect.orDie);
                 permissionModeBySession.set(sessionId, event.mode);
+                return;
+              }
+              if (event._tag === "GoalUpdated") {
+                yield* publishGoal(sessionId, ThreadGoal.make(event.goal));
+                return;
+              }
+              if (event._tag === "GoalCleared") {
+                yield* publishGoal(sessionId, null);
+                return;
+              }
+              if (
+                session.providerId === "grok" &&
+                event._tag === "Error" &&
+                isIgnorableGrokAuthNoise(event.message)
+              ) {
                 return;
               }
               const content = eventToContent(event);
@@ -862,6 +1137,16 @@ export const MessageStoreLive = Layer.scoped(
         if (statusPubsub !== undefined) {
           yield* PubSub.shutdown(statusPubsub);
           yield* Ref.update(statusPubsubs, (m) => {
+            const next = new Map(m);
+            next.delete(sessionId);
+            return next;
+          });
+        }
+        const queueMap = yield* Ref.get(queuePubsubs);
+        const queuePubsub = queueMap.get(sessionId);
+        if (queuePubsub !== undefined) {
+          yield* PubSub.shutdown(queuePubsub);
+          yield* Ref.update(queuePubsubs, (m) => {
             const next = new Map(m);
             next.delete(sessionId);
             return next;
@@ -942,7 +1227,7 @@ export const MessageStoreLive = Layer.scoped(
       Effect.gen(function* () {
         const rows = yield* sql<ChatRow>`
           SELECT id, project_id, worktree_id, title, active_session_id,
-                 archived_at, archived_worktree_json, created_at, updated_at
+                 archived_at, archived_worktree_json, last_message_at, last_read_at, created_at, updated_at
           FROM chats WHERE id = ${chatId} LIMIT 1
         `.pipe(Effect.orDie);
         const row = rows[0];
@@ -1056,6 +1341,7 @@ export const MessageStoreLive = Layer.scoped(
             yield* persistMessage(sessionId, {
               _tag: "user",
               text: input.initialPrompt!,
+              goal: false,
             });
           }
           // Detach the boot so the RPC reply happens immediately. The status
@@ -1176,6 +1462,7 @@ export const MessageStoreLive = Layer.scoped(
           yield* persistMessage(sessionId, {
             _tag: "user",
             text: input.initialPrompt!,
+            goal: false,
           });
         }
         yield* startSubscription(sessionId);
@@ -1435,7 +1722,7 @@ export const MessageStoreLive = Layer.scoped(
       Effect.gen(function* () {
         const rows = yield* sql<ChatRow>`
           SELECT id, project_id, worktree_id, title, active_session_id,
-                 archived_at, archived_worktree_json, created_at, updated_at
+                 archived_at, archived_worktree_json, last_message_at, last_read_at, created_at, updated_at
           FROM chats WHERE id = ${chatId} LIMIT 1
         `.pipe(Effect.orDie);
         if (rows.length === 0) {
@@ -1452,13 +1739,13 @@ export const MessageStoreLive = Layer.scoped(
         const rows = includeArchived
           ? yield* sql<ChatRow>`
               SELECT id, project_id, worktree_id, title, active_session_id,
-                     archived_at, archived_worktree_json, created_at, updated_at
+                     archived_at, archived_worktree_json, last_message_at, last_read_at, created_at, updated_at
               FROM chats WHERE project_id = ${projectId}
               ORDER BY updated_at DESC
             `.pipe(Effect.orDie)
           : yield* sql<ChatRow>`
               SELECT id, project_id, worktree_id, title, active_session_id,
-                     archived_at, archived_worktree_json, created_at, updated_at
+                     archived_at, archived_worktree_json, last_message_at, last_read_at, created_at, updated_at
               FROM chats
               WHERE project_id = ${projectId} AND archived_at IS NULL
               ORDER BY updated_at DESC
@@ -1488,10 +1775,10 @@ export const MessageStoreLive = Layer.scoped(
         yield* sql`
           INSERT INTO chats
             (id, project_id, worktree_id, title, active_session_id,
-             archived_at, created_at, updated_at)
+             archived_at, last_message_at, last_read_at, created_at, updated_at)
           VALUES
             (${chatId}, ${input.projectId}, ${worktreeId}, ${title}, NULL,
-             NULL, ${nowIso}, ${nowIso})
+             NULL, NULL, ${nowIso}, ${nowIso}, ${nowIso})
         `.pipe(Effect.asVoid, Effect.orDie);
         const initialSession = yield* createSession({
           chatId,
@@ -1538,6 +1825,16 @@ export const MessageStoreLive = Layer.scoped(
               ),
             )
           : null;
+        // Path 1: the chat was created WITH its first message (the common
+        // composer flow). Kick off the background auto-name now — it no-ops
+        // unless the chat has its own worktree.
+        if (
+          hasInitial &&
+          chat.worktreeId !== null &&
+          input.initialPrompt !== undefined
+        ) {
+          yield* forkAutoName(chat.id, initialSession.id, input.initialPrompt);
+        }
         return { chat, initialSession, initialMessage };
       });
 
@@ -1549,7 +1846,109 @@ export const MessageStoreLive = Layer.scoped(
           UPDATE chats SET title = ${title}, updated_at = ${nowIso}
           WHERE id = ${chatId}
         `.pipe(Effect.asVoid, Effect.orDie);
+        // Push the new title to any renderer subscribed via
+        // `chat.streamChanges` so the sidebar updates without a refetch.
+        const updated = yield* lookupChat(chatId);
+        yield* broadcastChat(updated);
       });
+
+    const markChatRead: MessageStoreShape["markChatRead"] = (chatId) =>
+      Effect.gen(function* () {
+        yield* lookupChat(chatId);
+        const nowIso = new Date().toISOString();
+        // Read state only — leave `updated_at` (sidebar ordering) untouched.
+        yield* sql`
+          UPDATE chats SET last_read_at = ${nowIso} WHERE id = ${chatId}
+        `.pipe(Effect.asVoid, Effect.orDie);
+        return yield* lookupChat(chatId);
+      });
+
+    const streamChatChanges: MessageStoreShape["streamChatChanges"] = (
+      projectId,
+    ) =>
+      Stream.unwrapScoped(
+        Effect.gen(function* () {
+          const sub = yield* chatChangesHub.subscribe;
+          return Stream.fromQueue(sub).pipe(
+            Stream.filter((chat) => chat.projectId === projectId),
+          );
+        }),
+      );
+
+    /**
+     * Conductor-style auto-name: on a chat's first user message, summarize it
+     * into a short title (LLM, with truncation fallback) and use that to
+     * rename both the chat and — when the chat has its own worktree — the
+     * worktree's git branch per the user's `branchNamingStyle`. Runs on a
+     * background fiber so the agent's first reply is never delayed; swallows
+     * every failure so a flaky title call can't wedge the session.
+     *
+     * Only chats WITH a worktree are renamed (a bare main-checkout chat keeps
+     * the cheap first-line title set elsewhere).
+     */
+    const autoNameChat = (
+      chatId: ChatId,
+      sessionId: SessionId,
+      firstText: string,
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        if (autoNamingChats.has(chatId)) return;
+        autoNamingChats.add(chatId);
+        const chat = yield* lookupChat(chatId).pipe(
+          Effect.catchAll(() => Effect.succeed(null)),
+        );
+        if (chat === null || chat.worktreeId === null) return;
+        const worktreeId = chat.worktreeId;
+        const wt = yield* worktrees.get(worktreeId);
+        if (wt === null) return;
+
+        // Name the chat with the SAME provider/model the session uses, so a
+        // user without Claude auth (e.g. Grok-only) still gets an LLM title.
+        const session = yield* lookupSession(sessionId).pipe(
+          Effect.catchAll(() => Effect.succeed(null)),
+        );
+        if (session === null) return;
+        const title = yield* titleGen.generate({
+          folderId: chat.projectId,
+          providerId: session.providerId,
+          model: session.model,
+          firstMessage: firstText,
+        });
+        if (title.length === 0 || title === "New chat") return;
+
+        // Title first — cheap, and the user sees the sidebar update even if
+        // the branch rename below is skipped or fails.
+        yield* renameChat(chatId, title);
+        yield* sql`
+          UPDATE sessions SET title = ${title} WHERE id = ${sessionId}
+        `.pipe(Effect.ignoreLogged);
+
+        const settings = yield* configStore.getSettings();
+        const username = yield* git
+          .getUserName(chat.projectId)
+          .pipe(Effect.catchAll(() => Effect.succeed("")));
+        const branch = formatBranchName(
+          title,
+          username,
+          settings.branchNamingStyle,
+          settings.branchNamingPrefix,
+        );
+        // Rename the git branch, then mirror it onto the worktree row so the
+        // DB and git agree. updateBranch only runs if the rename succeeded.
+        yield* git.renameBranch(chat.projectId, branch, worktreeId).pipe(
+          Effect.flatMap(() => worktrees.updateBranch(worktreeId, branch)),
+          Effect.catchAll(() => Effect.void),
+        );
+      }).pipe(Effect.catchAllCause(() => Effect.void));
+
+    const forkAutoName = (
+      chatId: ChatId,
+      sessionId: SessionId,
+      firstText: string,
+    ): Effect.Effect<void> =>
+      Effect.forkDaemon(autoNameChat(chatId, sessionId, firstText)).pipe(
+        Effect.asVoid,
+      );
 
     /**
      * Worktrees are immutable past the first user message in any of the
@@ -1721,7 +2120,7 @@ export const MessageStoreLive = Layer.scoped(
       Effect.gen(function* () {
         const chatRows = yield* sql<ChatRow>`
           SELECT id, project_id, worktree_id, title, active_session_id,
-                 archived_at, archived_worktree_json, created_at, updated_at
+                 archived_at, archived_worktree_json, last_message_at, last_read_at, created_at, updated_at
           FROM chats WHERE id = ${chatId} LIMIT 1
         `.pipe(Effect.orDie);
         const chatRow = chatRows[0];
@@ -1887,6 +2286,170 @@ export const MessageStoreLive = Layer.scoped(
         }),
       );
 
+    const ensureCodexGoalSession = (
+      sessionId: SessionId,
+    ): Effect.Effect<Session, SessionNotFoundError | GoalUnsupportedError> =>
+      Effect.gen(function* () {
+        const session = yield* lookupSession(sessionId);
+        if (session.providerId !== "codex") {
+          return yield* Effect.fail(
+            new GoalUnsupportedError({ providerId: session.providerId }),
+          );
+        }
+        return session;
+      });
+
+    const mapProviderSessionNotFound =
+      (
+        sessionId: SessionId,
+      ): ((
+        error: AgentSessionNotFoundError,
+      ) => Effect.Effect<never, SessionNotFoundError>) =>
+      () =>
+        Effect.fail(new SessionNotFoundError({ sessionId }));
+
+    const startProviderSessionOnly = (
+      session: Session,
+    ): Effect.Effect<void, SessionStartError> => {
+      runtimeModeBySession.set(session.id, session.runtimeMode);
+      permissionModeBySession.set(session.id, session.permissionMode);
+      const subagents = agentsFor(session.id);
+      return cwdForWorktree(session.worktreeId).pipe(
+        Effect.flatMap((cwdOverride) =>
+          provider
+            .start(
+              {
+                folderId: session.projectId,
+                providerId: session.providerId,
+                mode: "sdk",
+                sessionId: session.id,
+                model: session.model,
+                agents: subagents?.agents,
+                enableSubagents: subagents?.enableSubagents,
+                cwdOverride,
+                permissionMode: session.permissionMode,
+                toolSearch: session.toolSearch,
+              },
+              session.cursor,
+              () => getRuntimeModeFor(session.id),
+            )
+            .pipe(
+              Effect.flatMap(() => startSubscription(session.id)),
+              Effect.mapError((err) =>
+                err._tag === "ProviderNotAvailableError"
+                  ? new SessionStartError({
+                      providerId: session.providerId,
+                      reason: err.reason,
+                    })
+                  : err._tag === "AgentSessionStartError"
+                    ? new SessionStartError({
+                        providerId: err.providerId,
+                        reason: err.reason,
+                      })
+                    : new SessionStartError({
+                        providerId: session.providerId,
+                        reason: formatProviderFailure(err),
+                      }),
+              ),
+            ),
+        ),
+      );
+    };
+
+    const setGoalWithLiveProvider = (
+      session: Session,
+      goalInput: ThreadGoalSetInput,
+    ): Effect.Effect<ThreadGoal, SessionNotFoundError | SessionStartError> => {
+      const attempt = provider.setGoal(session.id, goalInput);
+      const retryBooting = (
+        retriesLeft: number,
+      ): Effect.Effect<
+        ThreadGoal,
+        AgentSessionNotFoundError | SessionNotFoundError
+      > =>
+        attempt.pipe(
+          Effect.catchTag("AgentSessionNotFoundError", (err) =>
+            Effect.gen(function* () {
+              const latest = yield* lookupSession(session.id);
+              if (retriesLeft <= 0 || latest.status !== "booting") {
+                return yield* Effect.fail(err);
+              }
+              yield* Effect.sleep("250 millis");
+              return yield* retryBooting(retriesLeft - 1);
+            }),
+          ),
+        );
+      return retryBooting(240).pipe(
+        Effect.catchTag("AgentSessionNotFoundError", () =>
+          startProviderSessionOnly(session).pipe(
+            Effect.zipRight(provider.setGoal(session.id, goalInput)),
+            Effect.catchTag(
+              "AgentSessionNotFoundError",
+              mapProviderSessionNotFound(session.id),
+            ),
+          ),
+        ),
+      );
+    };
+
+    const getGoal: MessageStoreShape["getGoal"] = (sessionId) =>
+      Effect.gen(function* () {
+        yield* ensureCodexGoalSession(sessionId);
+        const goal = yield* provider
+          .getGoal(sessionId)
+          .pipe(
+            Effect.catchTag(
+              "AgentSessionNotFoundError",
+              mapProviderSessionNotFound(sessionId),
+            ),
+          );
+        yield* publishGoal(sessionId, goal);
+        return goal;
+      });
+
+    const setGoal: MessageStoreShape["setGoal"] = (sessionId, goalInput) =>
+      Effect.gen(function* () {
+        const session = yield* ensureCodexGoalSession(sessionId);
+        const goal = yield* setGoalWithLiveProvider(session, goalInput);
+        yield* publishGoal(sessionId, goal);
+        return goal;
+      });
+
+    const clearGoal: MessageStoreShape["clearGoal"] = (sessionId) =>
+      Effect.gen(function* () {
+        yield* ensureCodexGoalSession(sessionId);
+        yield* provider
+          .clearGoal(sessionId)
+          .pipe(
+            Effect.catchTag(
+              "AgentSessionNotFoundError",
+              mapProviderSessionNotFound(sessionId),
+            ),
+          );
+        yield* publishGoal(sessionId, null);
+      });
+
+    const streamGoal: MessageStoreShape["streamGoal"] = (sessionId) =>
+      Stream.unwrapScoped(
+        Effect.gen(function* () {
+          yield* ensureCodexGoalSession(sessionId);
+          const pubsub = yield* getOrMakeGoalPubsub(sessionId);
+          const dequeue = yield* pubsub.subscribe;
+          const cached = goalsBySession.get(sessionId);
+          const initialGoal =
+            cached !== undefined
+              ? cached
+              : yield* provider
+                  .getGoal(sessionId)
+                  .pipe(Effect.catchAll(() => Effect.succeed(null)));
+          if (cached === undefined) goalsBySession.set(sessionId, initialGoal);
+          return Stream.concat(
+            Stream.succeed({ sessionId, goal: initialGoal }),
+            Stream.fromQueue(dequeue),
+          );
+        }),
+      );
+
     /**
      * Restart the provider for `session` under the same persisted id so the
      * message history stays attached to the same row. Used after a process
@@ -2012,15 +2575,30 @@ export const MessageStoreLive = Layer.scoped(
         return yield* lookupSession(sessionId);
       });
 
-    const sendMessage: MessageStoreShape["sendMessage"] = (
-      sessionId,
-      text,
-      attachments,
-      fileRefs,
-      skillRefs,
-    ) =>
+    const submitUserMessage = (
+      sessionId: SessionId,
+      text: string,
+      attachments?: ReadonlyArray<AttachmentRef>,
+      fileRefs?: ReadonlyArray<FileRef>,
+      skillRefs?: ReadonlyArray<SkillRef>,
+      annotations?: ReadonlyArray<CodeAnnotation>,
+      asGoal?: boolean,
+    ): Effect.Effect<boolean, SessionNotFoundError> =>
       Effect.gen(function* () {
         const session = yield* lookupSession(sessionId);
+        if (asGoal !== true && session.providerId === "codex") {
+          const goal = goalsBySession.get(sessionId);
+          const trimmed = text.trim();
+          if (
+            goal !== undefined &&
+            goal !== null &&
+            goal.status === "active" &&
+            goal.objective.trim() === trimmed &&
+            (yield* latestGoalUserMessageMatches(sessionId, trimmed))
+          ) {
+            return true;
+          }
+        }
         // Drop "pending-*" placeholder ids — those are renderer-side temp
         // tokens for attachments whose upload didn't finish before submit.
         // The bytes don't exist server-side, so forwarding them would just
@@ -2028,10 +2606,12 @@ export const MessageStoreLive = Layer.scoped(
         const cleanAttachments = (attachments ?? []).filter(
           (a) => !a.id.startsWith("pending-"),
         );
+        const annotationList = annotations ?? [];
         const hasRichSegments =
           cleanAttachments.length > 0 ||
           (fileRefs ?? []).length > 0 ||
-          (skillRefs ?? []).length > 0;
+          (skillRefs ?? []).length > 0 ||
+          annotationList.length > 0;
         const content: MessageContent = hasRichSegments
           ? {
               _tag: "user_rich",
@@ -2039,8 +2619,20 @@ export const MessageStoreLive = Layer.scoped(
               attachments: cleanAttachments,
               fileRefs: fileRefs ?? [],
               skillRefs: skillRefs ?? [],
+              annotations: annotationList,
+              goal: asGoal === true,
             }
-          : { _tag: "user", text };
+          : { _tag: "user", text, goal: asGoal === true };
+        // Annotations have no native CLI token (unlike `@file` / `/skill`),
+        // so the only place the model ever sees them is the prompt text.
+        // Serialise them into a numbered list here — the single injection
+        // point before `provider.send`, so every driver benefits. The
+        // persisted `text` above stays clean; the structured `annotations`
+        // array drives the rendered bubble.
+        const sendText =
+          annotationList.length > 0
+            ? `${serializeAnnotations(annotationList)}\n\n${text}`.trim()
+            : text;
         const persisted = yield* persistMessage(sessionId, content);
         // Pin the attachments so the GC sweep treats them as referenced —
         // a separate row per (message, attachment) keeps the existing
@@ -2053,8 +2645,8 @@ export const MessageStoreLive = Layer.scoped(
         }
         yield* broadcastMessage(sessionId, persisted);
         // Auto-title: if the session is still on its placeholder title, derive
-        // one from the user's first real message. Cheaper and more accurate
-        // than a separate LLM summarization step.
+        // a cheap first-line title immediately so the tab never reads
+        // "New chat" while the richer LLM pass (below) runs.
         if (session.title === "New chat") {
           const derived = titleFromInitial(text);
           if (derived !== "New chat") {
@@ -2063,6 +2655,59 @@ export const MessageStoreLive = Layer.scoped(
               WHERE id = ${sessionId} AND title = 'New chat'
             `.pipe(Effect.orDie);
           }
+        }
+        // Path 2: an empty chat (no initialPrompt) receiving its first user
+        // message via messages.send. When this is the chat's first user
+        // message, kick off the Conductor-style auto-name in the background
+        // (no-ops unless the chat has its own worktree).
+        const firstUserCount = yield* sql<{ readonly c: number }>`
+          SELECT COUNT(*) AS c FROM messages m
+          INNER JOIN sessions s ON s.id = m.session_id
+          WHERE s.chat_id = ${session.chatId} AND m.role = 'user'
+        `.pipe(
+          Effect.map((rows) => rows[0]?.c ?? 0),
+          Effect.catchAll(() => Effect.succeed(0)),
+        );
+        if (firstUserCount === 1 && text.trim().length > 0) {
+          yield* forkAutoName(session.chatId, sessionId, text);
+        }
+        if (asGoal === true) {
+          const objective = text.trim();
+          if (objective.length === 0) return false;
+          if (session.providerId !== "codex") {
+            const persistedError = yield* persistMessage(sessionId, {
+              _tag: "error",
+              message:
+                "Goal mode is currently only supported for Codex sessions.",
+            });
+            yield* broadcastMessage(sessionId, persistedError);
+            yield* ndjsonAppend(sessionId, persistedError);
+            return false;
+          }
+          const goal = yield* setGoalWithLiveProvider(session, {
+            objective,
+            status: "active",
+          }).pipe(
+            Effect.catchAll((err) =>
+              Effect.gen(function* () {
+                const message =
+                  err._tag === "SessionStartError"
+                    ? `Goal mode could not start Codex: ${err.reason}`
+                    : "Goal mode could not start Codex for this session.";
+                const persistedError = yield* persistMessage(sessionId, {
+                  _tag: "error",
+                  message,
+                });
+                yield* broadcastMessage(sessionId, persistedError);
+                yield* ndjsonAppend(sessionId, persistedError);
+                yield* setStatus(sessionId, "idle");
+                return null;
+              }),
+            ),
+          );
+          if (goal === null) return false;
+          yield* publishGoal(sessionId, goal);
+          return true;
         }
         // First attempt: push into the existing provider session. If that
         // session is gone (provider dropped it across an app restart) start
@@ -2073,7 +2718,7 @@ export const MessageStoreLive = Layer.scoped(
           })`,
         );
         const sendResult = yield* provider
-          .send(sessionId, text, cleanAttachments, fileRefs, skillRefs)
+          .send(sessionId, sendText, cleanAttachments, fileRefs, skillRefs)
           .pipe(
             Effect.matchEffect({
               onFailure: (err) =>
@@ -2093,28 +2738,8 @@ export const MessageStoreLive = Layer.scoped(
             );
 
           if (looksLikeGrokAuthWorkerDeath) {
-            const count = (grokAuthWorkerDeathCount.get(sessionId) ?? 0) + 1;
-            grokAuthWorkerDeathCount.set(sessionId, count);
-
-            if (count >= 2) {
-              // Stop auto-restarting. The user is hitting the known
-              // local `grok login` + agent worker auth limitation.
-              const message =
-                `Grok's coding agent worker is repeatedly rejecting the session with AuthorizationRequired, even though your local login appears valid.\n\n` +
-                `This is a known current limitation when using \`grok login\` (cached_token) with the full agent.\n\n` +
-                `You can try:\n` +
-                `• Running \`grok login\` again\n` +
-                `• Temporarily setting an XAI API key in the Grok provider settings\n\n` +
-                `Further automatic restarts have been disabled for this session to avoid spam.`;
-              const persistedError = yield* persistMessage(sessionId, {
-                _tag: "error",
-                message,
-              });
-              yield* broadcastMessage(sessionId, persistedError);
-              yield* ndjsonAppend(sessionId, persistedError);
-              yield* setStatus(sessionId, "idle");
-              return;
-            }
+            yield* setStatus(sessionId, "running");
+            return true;
           }
 
           console.log(
@@ -2122,7 +2747,7 @@ export const MessageStoreLive = Layer.scoped(
           );
           const restartResult = yield* restartProviderSession(
             session,
-            text,
+            sendText,
             cleanAttachments,
           ).pipe(
             Effect.matchEffect({
@@ -2146,11 +2771,271 @@ export const MessageStoreLive = Layer.scoped(
             yield* broadcastMessage(sessionId, persistedError);
             yield* ndjsonAppend(sessionId, persistedError);
             yield* setStatus(sessionId, "idle");
-            return;
+            return false;
           }
         }
         yield* setStatus(sessionId, "running");
+        return true;
       });
+
+    const sendMessage: MessageStoreShape["sendMessage"] = (
+      sessionId,
+      text,
+      attachments,
+      fileRefs,
+      skillRefs,
+      annotations,
+      asGoal,
+    ) =>
+      Effect.gen(function* () {
+        yield* submitUserMessage(
+          sessionId,
+          text,
+          attachments,
+          fileRefs,
+          skillRefs,
+          annotations,
+          asGoal,
+        );
+      });
+
+    const listQueuedMessages: MessageStoreShape["listQueuedMessages"] = (
+      sessionId,
+    ) =>
+      Effect.gen(function* () {
+        yield* lookupSession(sessionId);
+        return yield* listQueuedRows(sessionId);
+      });
+
+    const streamQueuedMessages: MessageStoreShape["streamQueuedMessages"] = (
+      sessionId,
+    ) =>
+      Stream.unwrapScoped(
+        Effect.gen(function* () {
+          yield* lookupSession(sessionId);
+          const pubsub = yield* getOrMakeQueuePubsub(sessionId);
+          const dequeue = yield* pubsub.subscribe;
+          const initial = yield* listQueuedRows(sessionId);
+          return Stream.concat(
+            Stream.succeed(initial),
+            Stream.fromQueue(dequeue),
+          );
+        }),
+      );
+
+    const addQueuedMessage: MessageStoreShape["addQueuedMessage"] = (
+      sessionId,
+      input,
+    ) =>
+      Effect.gen(function* () {
+        yield* lookupSession(sessionId);
+        yield* ensureQueuedMessagesSchema;
+        const maxRows = yield* sql<{ readonly max_position: number | null }>`
+          SELECT MAX(queue_order) AS max_position
+          FROM queued_messages
+          WHERE session_id = ${sessionId}
+        `.pipe(Effect.orDie);
+        const position = (maxRows[0]?.max_position ?? -1) + 1;
+        const now = new Date();
+        const nowIso = now.toISOString();
+        const id = `q_${crypto.randomUUID()}`;
+        yield* sql`
+          INSERT INTO queued_messages
+            (id, session_id, queue_order, input_json, created_at, updated_at)
+          VALUES
+            (${id}, ${sessionId}, ${position}, ${JSON.stringify(input)},
+             ${nowIso}, ${nowIso})
+        `.pipe(Effect.orDie);
+        const item = QueuedMessage.make({
+          id,
+          sessionId,
+          input,
+          position,
+          createdAt: now,
+          updatedAt: now,
+        });
+        yield* broadcastQueue(sessionId);
+        return item;
+      });
+
+    const updateQueuedMessage: MessageStoreShape["updateQueuedMessage"] = (
+      sessionId,
+      queueId,
+      input,
+    ) =>
+      Effect.gen(function* () {
+        yield* lookupSession(sessionId);
+        const nowIso = new Date().toISOString();
+        yield* sql`
+          UPDATE queued_messages
+          SET input_json = ${JSON.stringify(input)}, updated_at = ${nowIso}
+          WHERE session_id = ${sessionId} AND id = ${queueId}
+        `.pipe(Effect.orDie);
+        const rows = yield* sql<QueuedMessageRow>`
+          SELECT id, session_id, queue_order, input_json, created_at, updated_at
+          FROM queued_messages
+          WHERE session_id = ${sessionId} AND id = ${queueId}
+          LIMIT 1
+        `.pipe(Effect.orDie);
+        const item =
+          rows[0] === undefined
+            ? yield* addQueuedMessage(sessionId, input)
+            : queuedMessageFromRow(rows[0]);
+        yield* broadcastQueue(sessionId);
+        return item;
+      });
+
+    const deleteQueuedMessage: MessageStoreShape["deleteQueuedMessage"] = (
+      sessionId,
+      queueId,
+    ) =>
+      Effect.gen(function* () {
+        yield* lookupSession(sessionId);
+        yield* sql`
+          DELETE FROM queued_messages
+          WHERE session_id = ${sessionId} AND id = ${queueId}
+        `.pipe(Effect.orDie);
+        yield* normalizeQueuePositions(sessionId);
+        yield* broadcastQueue(sessionId);
+      });
+
+    const reorderQueuedMessages: MessageStoreShape["reorderQueuedMessages"] = (
+      sessionId,
+      queueIds,
+    ) =>
+      Effect.gen(function* () {
+        yield* lookupSession(sessionId);
+        const existing = yield* listQueuedRows(sessionId);
+        const byId = new Map(existing.map((item) => [item.id, item]));
+        const ordered = [
+          ...queueIds.flatMap((id) => {
+            const item = byId.get(id);
+            if (item === undefined) return [];
+            byId.delete(id);
+            return [item];
+          }),
+          ...existing.filter((item) => byId.has(item.id)),
+        ];
+        const nowIso = new Date().toISOString();
+        for (let i = 0; i < ordered.length; i += 1) {
+          yield* sql`
+            UPDATE queued_messages
+            SET queue_order = ${i}, updated_at = ${nowIso}
+            WHERE session_id = ${sessionId} AND id = ${ordered[i]!.id}
+          `.pipe(Effect.orDie);
+        }
+        const next = yield* listQueuedRows(sessionId);
+        yield* broadcastQueue(sessionId);
+        return next;
+      });
+
+    const claimQueuedMessage = (
+      sessionId: SessionId,
+      queueId: string,
+    ): Effect.Effect<QueuedMessage | null> =>
+      Effect.gen(function* () {
+        yield* ensureQueuedMessagesSchema;
+        const rows = yield* sql<QueuedMessageRow>`
+          SELECT id, session_id, queue_order, input_json, created_at, updated_at
+          FROM queued_messages
+          WHERE session_id = ${sessionId} AND id = ${queueId}
+          LIMIT 1
+        `.pipe(Effect.orDie);
+        const row = rows[0];
+        if (row === undefined) return null;
+        const item = queuedMessageFromRow(row);
+        yield* sql`
+          DELETE FROM queued_messages
+          WHERE session_id = ${sessionId} AND id = ${queueId}
+        `.pipe(Effect.orDie);
+        yield* normalizeQueuePositions(sessionId);
+        yield* broadcastQueue(sessionId);
+        return item;
+      });
+
+    const restoreQueuedMessage = (item: QueuedMessage): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        yield* ensureQueuedMessagesSchema;
+        const existing = yield* sql<{ readonly count: number }>`
+          SELECT COUNT(*) AS count
+          FROM queued_messages
+          WHERE session_id = ${item.sessionId} AND id = ${item.id}
+        `.pipe(Effect.orDie);
+        if ((existing[0]?.count ?? 0) > 0) return;
+        yield* sql`
+          INSERT INTO queued_messages
+            (id, session_id, queue_order, input_json, created_at, updated_at)
+          VALUES
+            (${item.id}, ${item.sessionId}, ${item.position},
+             ${JSON.stringify(item.input)}, ${item.createdAt.toISOString()},
+             ${new Date().toISOString()})
+        `.pipe(Effect.orDie);
+        yield* normalizeQueuePositions(item.sessionId);
+        yield* broadcastQueue(item.sessionId);
+      });
+
+    const sendClaimedQueuedMessage = (
+      item: QueuedMessage,
+    ): Effect.Effect<void, SessionNotFoundError> =>
+      Effect.gen(function* () {
+        const ok = yield* submitUserMessage(
+          item.sessionId,
+          item.input.text,
+          item.input.attachments,
+          item.input.fileRefs,
+          item.input.skillRefs,
+          item.input.annotations,
+        );
+        if (!ok) {
+          yield* restoreQueuedMessage(item);
+        }
+      });
+
+    const sendQueuedMessageNow: MessageStoreShape["sendQueuedMessageNow"] = (
+      sessionId,
+      queueId,
+    ) =>
+      Effect.gen(function* () {
+        yield* lookupSession(sessionId);
+        const item = yield* claimQueuedMessage(sessionId, queueId);
+        if (item === null) return;
+        yield* sendClaimedQueuedMessage(item);
+      });
+
+    const flushQueuedMessages: MessageStoreShape["flushQueuedMessages"] = (
+      sessionId,
+    ) =>
+      Effect.gen(function* () {
+        yield* lookupSession(sessionId);
+        const current = yield* Ref.get(flushingQueues);
+        if (current.has(sessionId)) return;
+        yield* Ref.update(flushingQueues, (set) => {
+          const next = new Set(set);
+          next.add(sessionId);
+          return next;
+        });
+        try {
+          const session = yield* lookupSession(sessionId);
+          if (session.status === "running" || session.status === "booting") {
+            return;
+          }
+          const queue = yield* listQueuedRows(sessionId);
+          const head = queue[0];
+          if (head === undefined) return;
+          const claimed = yield* claimQueuedMessage(sessionId, head.id);
+          if (claimed === null) return;
+          yield* sendClaimedQueuedMessage(claimed);
+        } finally {
+          yield* Ref.update(flushingQueues, (set) => {
+            const next = new Set(set);
+            next.delete(sessionId);
+            return next;
+          });
+        }
+      });
+
+    flushQueueAfterIdle = (sessionId) =>
+      flushQueuedMessages(sessionId).pipe(Effect.catchAll(() => Effect.void));
 
     const interruptSession: MessageStoreShape["interruptSession"] = (
       sessionId,
@@ -2160,6 +3045,7 @@ export const MessageStoreLive = Layer.scoped(
         yield* provider
           .interrupt(sessionId)
           .pipe(Effect.mapError(() => new SessionNotFoundError({ sessionId })));
+        yield* setStatus(sessionId, "idle");
       });
 
     const getSession: MessageStoreShape["getSession"] = (sessionId) =>
@@ -2183,6 +3069,8 @@ export const MessageStoreLive = Layer.scoped(
       getChat,
       createChat,
       renameChat,
+      markChatRead,
+      streamChatChanges,
       setChatWorktree,
       setChatActiveSession,
       archiveChat,
@@ -2192,8 +3080,20 @@ export const MessageStoreLive = Layer.scoped(
       listMessages,
       streamMessages,
       streamStatus,
+      getGoal,
+      setGoal,
+      clearGoal,
+      streamGoal,
       sendMessage,
       interruptSession,
+      listQueuedMessages,
+      streamQueuedMessages,
+      addQueuedMessage,
+      updateQueuedMessage,
+      deleteQueuedMessage,
+      sendQueuedMessageNow,
+      reorderQueuedMessages,
+      flushQueuedMessages,
     } as const;
   }),
 );

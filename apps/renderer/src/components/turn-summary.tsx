@@ -1,6 +1,10 @@
-import { BubbleChatIcon, Wrench01Icon } from "@hugeicons/core-free-icons";
+import {
+  ArrowDown01Icon,
+  ArrowRight01Icon,
+  BubbleChatIcon,
+  Wrench01Icon,
+} from "@hugeicons-pro/core-bulk-rounded";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { ChevronDown, ChevronRight } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import type { AgentItemId, Message, UserQuestionAnswer } from "@memoize/wire";
@@ -10,7 +14,12 @@ import { cn } from "~/lib/utils";
 
 import { CopyButton } from "./copy-button.tsx";
 import { FileBadge } from "./file-badge.tsx";
-import { diffStats, extractEdits } from "./inline-diff.tsx";
+import {
+  diffStats,
+  extractEdits,
+  extractPatchEntries,
+  patchStats,
+} from "./inline-diff.tsx";
 import { MarkdownBody } from "./markdown-body.tsx";
 import { MessageRow, type ToolResultRecord } from "./message-row.tsx";
 import { SubagentRow } from "./subagent-row.tsx";
@@ -32,19 +41,32 @@ interface FileStat {
 
 const aggregateFileStats = (body: ReadonlyArray<Message>): FileStat[] => {
   const map = new Map<string, { added: number; removed: number }>();
-  for (const m of body) {
-    if (m.content._tag !== "tool_use") continue;
-    const tool = m.content.tool;
-    if (tool !== "Edit" && tool !== "Write" && tool !== "MultiEdit") continue;
-    const edits = extractEdits(tool, m.content.input);
-    if (edits.length === 0) continue;
-    const stats = diffStats(edits);
-    const path = edits[0]!.path;
+  const addStats = (
+    path: string,
+    stats: { added: number; removed: number },
+  ) => {
     const prev = map.get(path) ?? { added: 0, removed: 0 };
     map.set(path, {
       added: prev.added + stats.added,
       removed: prev.removed + stats.removed,
     });
+  };
+  for (const m of body) {
+    if (m.content._tag !== "tool_use") continue;
+    const tool = m.content.tool;
+    if (tool !== "Edit" && tool !== "Write" && tool !== "MultiEdit") continue;
+    const patches = extractPatchEntries(m.content.input);
+    if (patches.length > 0) {
+      for (const patch of patches) {
+        addStats(patch.file_path, patchStats([patch]));
+      }
+      continue;
+    }
+    const edits = extractEdits(tool, m.content.input);
+    if (edits.length === 0) continue;
+    const stats = diffStats(edits);
+    const path = edits[0]!.path;
+    addStats(path, stats);
   }
   return Array.from(map.entries()).map(([path, s]) => ({ path, ...s }));
 };
@@ -125,7 +147,7 @@ export function TurnSummary({
     return items;
   }, [toolUses]);
 
-  const Chevron = expanded ? ChevronDown : ChevronRight;
+  const chevron = expanded ? ArrowDown01Icon : ArrowRight01Icon;
   const mutedWhenOpen = expanded
     ? "text-muted-foreground/50"
     : "text-muted-foreground";
@@ -142,7 +164,10 @@ export function TurnSummary({
           mutedWhenOpen,
         )}
       >
-        <Chevron className="size-3.5 shrink-0 opacity-70" />
+        <HugeiconsIcon
+          icon={chevron}
+          className="size-3.5 shrink-0 opacity-70"
+        />
         <span className="flex items-center gap-1.5">
           <HugeiconsIcon
             icon={Wrench01Icon}
@@ -233,15 +258,12 @@ export function TurnSummary({
           />
         ) : null}
         {fileStats.map((f) => (
-          <span key={f.path} className="flex items-center gap-1.5 tabular-nums">
-            <FileBadge path={f.path} />
-            {f.added > 0 ? (
-              <span className="text-emerald-400/80">+{f.added}</span>
-            ) : null}
-            {f.removed > 0 ? (
-              <span className="text-red-400/80">-{f.removed}</span>
-            ) : null}
-          </span>
+          <FileBadge
+            key={f.path}
+            path={f.path}
+            view="diff"
+            diffStats={{ added: f.added, removed: f.removed }}
+          />
         ))}
       </div>
     </div>

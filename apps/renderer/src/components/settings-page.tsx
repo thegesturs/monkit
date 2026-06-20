@@ -1,18 +1,22 @@
+import { HugeiconsIcon } from "@hugeicons/react";
+import type { IconSvgElement } from "@hugeicons/react";
 import {
-  ArrowLeft,
-  Box,
-  Check,
-  FlaskConical,
-  FolderClosed,
-  GitBranch,
-  Globe,
-  Keyboard,
-  Plus,
-  RotateCw,
-  Settings as SettingsIcon,
-  Trash2,
-  TriangleAlert,
-} from "lucide-react";
+  Alert01Icon,
+  ArrowLeft01Icon,
+  Delete02Icon,
+  Folder01Icon,
+  GitBranchIcon,
+  GlobeIcon,
+  KeyboardIcon,
+  PackageIcon,
+  RotateRight01Icon,
+  Settings01Icon,
+  TaskDone01Icon,
+  TestTubeIcon,
+  Tick01Icon,
+  VolumeHighIcon,
+} from "@hugeicons-pro/core-bulk-rounded";
+import { Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { Effect } from "effect";
@@ -20,7 +24,9 @@ import { Effect } from "effect";
 import { getRpcClient } from "../lib/rpc-client.ts";
 
 import {
+  type BranchNamingStyle,
   MODELS_BY_PROVIDER,
+  type CompletionSoundPreset,
   type Folder,
   type FolderId,
   type ProviderId,
@@ -32,6 +38,11 @@ import {
   useRelativeTimeTick,
 } from "~/lib/use-relative-time.ts";
 import { cn } from "~/lib/utils";
+import {
+  COMPLETION_SOUND_PRESETS,
+  playCompletionSound,
+  prepareCompletionSound,
+} from "../lib/completion-sounds.ts";
 import { DEFAULT_SUBAGENT_PRESETS } from "../lib/subagent-presets.ts";
 import { useProvidersStore } from "../store/providers.ts";
 import { useSettingsStore } from "../store/settings.ts";
@@ -43,6 +54,7 @@ import { ProviderIcon } from "./provider-icons.tsx";
 import { MODES_ORDER, MODE_META } from "./runtime-mode-meta.ts";
 import { DeveloperPane } from "./settings/developer-pane.tsx";
 import { KeybindingsPane } from "./settings/keybindings-editor.tsx";
+import { PokedexPane } from "./settings/pokedex-pane.tsx";
 import { RepositorySettings } from "./settings-repository.tsx";
 import { Button } from "./ui/button.tsx";
 import {
@@ -68,7 +80,7 @@ const PROVIDER_LABEL: Record<ProviderId, string> = {
 type RailItemBase = {
   readonly id: string;
   readonly label: string;
-  readonly Icon: React.ComponentType<{ className?: string }>;
+  readonly Icon: IconSvgElement;
   readonly section: SettingsSection;
 };
 
@@ -76,31 +88,37 @@ const TOP_RAIL: ReadonlyArray<RailItemBase> = [
   {
     id: "general",
     label: "General",
-    Icon: SettingsIcon,
+    Icon: Settings01Icon,
     section: { kind: "general" },
   },
   {
     id: "providers",
     label: "Providers",
-    Icon: Box,
+    Icon: PackageIcon,
     section: { kind: "providers" },
   },
   {
     id: "workspace",
     label: "Workspace",
-    Icon: GitBranch,
+    Icon: GitBranchIcon,
     section: { kind: "workspace" },
+  },
+  {
+    id: "pokedex",
+    label: "Pokedex",
+    Icon: TaskDone01Icon,
+    section: { kind: "pokedex" },
   },
   {
     id: "browser",
     label: "Browser",
-    Icon: Globe,
+    Icon: GlobeIcon,
     section: { kind: "browser" },
   },
   {
     id: "shortcuts",
     label: "Keyboard shortcuts",
-    Icon: Keyboard,
+    Icon: KeyboardIcon,
     section: { kind: "shortcuts" },
   },
   // Dev-only visual playground (accent swatches + workflow chip/button
@@ -108,7 +126,7 @@ const TOP_RAIL: ReadonlyArray<RailItemBase> = [
   {
     id: "developer",
     label: "Developer",
-    Icon: FlaskConical,
+    Icon: TestTubeIcon,
     section: { kind: "developer" },
   },
 ];
@@ -143,18 +161,19 @@ export function SettingsPage() {
           aria-label="Back to app"
           className="flex items-center gap-1 rounded p-1 text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground [-webkit-app-region:no-drag]"
         >
-          <ArrowLeft className="size-3.5" />
+          <HugeiconsIcon icon={ArrowLeft01Icon} className="size-3.5" />
           <span>Back to app</span>
         </button>
       </header>
       <div className="flex min-h-0 flex-1">
-        <Rail
-          section={section}
-          onSelect={setSection}
-          folders={folders}
-        />
+        <Rail section={section} onSelect={setSection} folders={folders} />
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-10 py-8">
-          <div className="mx-auto flex w-full max-w-2xl flex-col gap-10">
+          <div
+            className={cn(
+              "mx-auto flex w-full flex-col gap-10",
+              section.kind === "pokedex" ? "max-w-5xl" : "max-w-2xl",
+            )}
+          >
             <SectionTitle section={section} folders={folders} />
             <Pane section={section} />
           </div>
@@ -174,7 +193,7 @@ function Rail({
   folders: ReadonlyArray<Folder>;
 }) {
   return (
-    <nav className="flex w-56 shrink-0 flex-col gap-6 border-r border-border/40 bg-sidebar/40 px-3 py-6 text-sm text-sidebar-foreground">
+    <nav className="flex w-56 shrink-0 flex-col gap-6 border-r border-border/40 bg-sidebar px-3 py-6 text-sm text-sidebar-foreground">
       <div className="flex flex-col gap-0.5">
         {VISIBLE_RAIL.map((item) => {
           const active =
@@ -203,8 +222,7 @@ function Rail({
           <div className="flex flex-col gap-0.5">
             {folders.map((f) => {
               const active =
-                section.kind === "repository" &&
-                section.projectId === f.id;
+                section.kind === "repository" && section.projectId === f.id;
               return (
                 <RailButton
                   key={f.id}
@@ -212,7 +230,7 @@ function Rail({
                   onClick={() =>
                     onSelect({ kind: "repository", projectId: f.id })
                   }
-                  icon={FolderClosed}
+                  icon={Folder01Icon}
                   label={f.name}
                   title={f.path}
                   truncate
@@ -236,7 +254,7 @@ function RailButton({
 }: {
   active: boolean;
   onClick: () => void;
-  icon: React.ComponentType<{ className?: string }>;
+  icon: IconSvgElement;
   label: string;
   title?: string;
   truncate?: boolean;
@@ -253,7 +271,7 @@ function RailButton({
           : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
       )}
     >
-      <Icon className="size-4 shrink-0" />
+      <HugeiconsIcon icon={Icon} className="size-4 shrink-0" />
       <span className={cn(truncate && "truncate")}>{label}</span>
     </button>
   );
@@ -286,6 +304,12 @@ function SectionTitle({
         subtitle: "How new chats relate to your git checkout.",
       };
     }
+    if (section.kind === "pokedex") {
+      return {
+        title: "Pokedex",
+        subtitle: "Unlocked Pokémon from all worktrees.",
+      };
+    }
     if (section.kind === "browser") {
       return {
         title: "Browser",
@@ -301,7 +325,8 @@ function SectionTitle({
     if (section.kind === "developer") {
       return {
         title: "Developer",
-        subtitle: "Accent palette + workflow chip/button states (dev builds only).",
+        subtitle:
+          "Accent palette + workflow chip/button states (dev builds only).",
       };
     }
     const f = folders.find((x) => x.id === section.projectId);
@@ -334,6 +359,7 @@ function Pane({ section }: { section: SettingsSection }) {
   if (section.kind === "general") return <GeneralPane />;
   if (section.kind === "providers") return <ProvidersPane />;
   if (section.kind === "workspace") return <WorkspacePane />;
+  if (section.kind === "pokedex") return <PokedexPane />;
   if (section.kind === "browser") return <BrowserSettingsPane />;
   if (section.kind === "shortcuts") return <KeybindingsPane />;
   if (section.kind === "developer") return <DeveloperPane />;
@@ -391,14 +417,16 @@ function BrowserSettingsPane() {
 
   const remove = async (target: string) => {
     const client = await getRpcClient();
-    await Effect.runPromise(client.browser.removeCredential({ origin: target }));
+    await Effect.runPromise(
+      client.browser.removeCredential({ origin: target }),
+    );
     await load();
   };
 
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-start gap-2 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2.5 text-[12px] leading-relaxed text-amber-200">
-        <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+        <HugeiconsIcon icon={Alert01Icon} className="mt-0.5 size-4 shrink-0" />
         <span>
           <strong className="font-semibold">Dummy / test logins only.</strong>{" "}
           Never store a real or production password here. These are for seeded
@@ -437,7 +465,7 @@ function BrowserSettingsPane() {
                     aria-label={`Remove login for ${c.origin}`}
                     className="flex size-7 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
                   >
-                    <Trash2 className="size-3.5" />
+                    <HugeiconsIcon icon={Delete02Icon} className="size-3.5" />
                   </button>
                 </li>
               ))}
@@ -467,7 +495,7 @@ function BrowserSettingsPane() {
                 onClick={() => void add()}
                 disabled={busy || origin.trim() === "" || password === ""}
               >
-                <Plus className="size-3.5" />
+                <Plus className="size-3.5" strokeWidth={1.8} />
                 Add login
               </Button>
             </div>
@@ -502,71 +530,248 @@ function CredInput({
   );
 }
 
+const BRANCH_STYLE_ORDER: ReadonlyArray<BranchNamingStyle> = [
+  "username-slug",
+  "slug",
+  "feat-slug",
+  "custom",
+];
+
+const BRANCH_STYLE_META: Record<
+  BranchNamingStyle,
+  { label: string; example: string }
+> = {
+  "username-slug": {
+    label: "username/branch",
+    example: "swarajbachu/dark-mode",
+  },
+  slug: { label: "branch only", example: "dark-mode" },
+  "feat-slug": { label: "feat/branch", example: "feat/dark-mode" },
+  custom: { label: "custom prefix", example: "prefix/dark-mode" },
+};
+
 function GeneralPane() {
   const defaultRuntimeMode = useSettingsStore((s) => s.defaultRuntimeMode);
   const setDefaultRuntimeMode = useSettingsStore(
     (s) => s.setDefaultRuntimeMode,
+  );
+  const completionSoundEnabled = useSettingsStore(
+    (s) => s.completionSoundEnabled,
+  );
+  const setCompletionSoundEnabled = useSettingsStore(
+    (s) => s.setCompletionSoundEnabled,
+  );
+  const completionSoundPreset = useSettingsStore(
+    (s) => s.completionSoundPreset,
+  );
+  const setCompletionSoundPreset = useSettingsStore(
+    (s) => s.setCompletionSoundPreset,
+  );
+  const branchNamingStyle = useSettingsStore((s) => s.branchNamingStyle);
+  const setBranchNamingStyle = useSettingsStore((s) => s.setBranchNamingStyle);
+  const branchNamingPrefix = useSettingsStore((s) => s.branchNamingPrefix);
+  const setBranchNamingPrefix = useSettingsStore(
+    (s) => s.setBranchNamingPrefix,
   );
   const setOnboardingCompleted = useSettingsStore(
     (s) => s.setOnboardingCompleted,
   );
   const setView = useUiStore((s) => s.setView);
 
+  // Local mirror so typing is smooth; persist on blur to avoid an atomic
+  // settings-file write per keystroke.
+  const [prefixDraft, setPrefixDraft] = useState(branchNamingPrefix);
+  useEffect(() => {
+    setPrefixDraft(branchNamingPrefix);
+  }, [branchNamingPrefix]);
+
   return (
-    <>
-      <SettingsFrame
-        title="Default permission mode"
-        trailing={
-          <Select
-            value={defaultRuntimeMode}
-            onValueChange={(v) => setDefaultRuntimeMode(v as RuntimeMode)}
-            items={MODES_ORDER.map((m) => ({
-              label: MODE_META[m].label,
-              value: m,
-            }))}
+    <div className="flex flex-col gap-4">
+      <SettingsGroup
+        title="Agent defaults"
+        description="Defaults used when a new chat or background agent starts."
+      >
+        <SettingsRow
+          title="Default permission mode"
+          description="How the agent handles tool calls in new sessions. Each session can override this from its composer."
+          action={
+            <Select
+              value={defaultRuntimeMode}
+              onValueChange={(v) => setDefaultRuntimeMode(v as RuntimeMode)}
+              items={MODES_ORDER.map((m) => ({
+                label: MODE_META[m].label,
+                value: m,
+              }))}
+            >
+              <SelectTrigger size="sm" className="w-[180px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectPopup>
+                {MODES_ORDER.map((mode) => {
+                  const m = MODE_META[mode];
+                  return (
+                    <SelectItem key={mode} value={mode}>
+                      <div className="flex flex-col">
+                        <span>{m.label}</span>
+                        <span className="text-[10px] text-muted-foreground">
+                          {m.description}
+                        </span>
+                      </div>
+                    </SelectItem>
+                  );
+                })}
+              </SelectPopup>
+            </Select>
+          }
+        />
+
+        <SettingsRow
+          title="Agent completion sound"
+          description="Play a short sound when any agent turn finishes, including agents working in background chats."
+          action={
+            <Switch
+              checked={completionSoundEnabled}
+              onCheckedChange={(value) => {
+                setCompletionSoundEnabled(value);
+                if (value) void prepareCompletionSound();
+              }}
+            />
+          }
+        >
+          <div
+            className={cn(
+              "flex flex-wrap items-center gap-2",
+              !completionSoundEnabled && "opacity-60",
+            )}
           >
-            <SelectTrigger size="sm" className="w-[180px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectPopup>
-              {MODES_ORDER.map((mode) => {
-                const m = MODE_META[mode];
-                return (
-                  <SelectItem key={mode} value={mode}>
-                    <div className="flex flex-col">
-                      <span>{m.label}</span>
-                      <span className="text-[10px] text-muted-foreground">
-                        {m.description}
-                      </span>
-                    </div>
+            <HugeiconsIcon
+              icon={VolumeHighIcon}
+              className="size-4 shrink-0 text-muted-foreground"
+            />
+            <Select
+              value={completionSoundPreset}
+              onValueChange={(v) =>
+                setCompletionSoundPreset(v as CompletionSoundPreset)
+              }
+              items={COMPLETION_SOUND_PRESETS.map((preset) => ({
+                label: preset.label,
+                value: preset.value,
+              }))}
+            >
+              <SelectTrigger
+                size="sm"
+                className="w-[160px]"
+                disabled={!completionSoundEnabled}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectPopup>
+                {COMPLETION_SOUND_PRESETS.map((preset) => (
+                  <SelectItem key={preset.value} value={preset.value}>
+                    {preset.label}
                   </SelectItem>
-                );
-              })}
-            </SelectPopup>
-          </Select>
-        }
-        description="How the agent handles tool calls in new sessions. Each session can override this from its composer."
-      />
+                ))}
+              </SelectPopup>
+            </Select>
+            <Button
+              variant="settings"
+              size="sm"
+              disabled={!completionSoundEnabled}
+              onClick={() => void playCompletionSound(completionSoundPreset)}
+            >
+              Preview
+            </Button>
+          </div>
+        </SettingsRow>
+      </SettingsGroup>
+
+      <SettingsGroup
+        title="Workspace naming"
+        description="Controls how monkit names new worktree-backed branches."
+      >
+        <SettingsRow
+          title="Branch naming"
+          description="When a new chat with its own worktree gets its first message, monkit summarizes it and renames the chat plus its git branch in this shape."
+          action={
+            <Select
+              value={branchNamingStyle}
+              onValueChange={(v) =>
+                setBranchNamingStyle(v as BranchNamingStyle)
+              }
+              items={BRANCH_STYLE_ORDER.map((s) => ({
+                label: BRANCH_STYLE_META[s].label,
+                value: s,
+              }))}
+            >
+              <SelectTrigger size="sm" className="w-[180px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectPopup>
+                {BRANCH_STYLE_ORDER.map((style) => {
+                  const m = BRANCH_STYLE_META[style];
+                  return (
+                    <SelectItem key={style} value={style}>
+                      <div className="flex flex-col">
+                        <span>{m.label}</span>
+                        <span className="text-[10px] text-muted-foreground">
+                          {m.example}
+                        </span>
+                      </div>
+                    </SelectItem>
+                  );
+                })}
+              </SelectPopup>
+            </Select>
+          }
+        >
+          {branchNamingStyle === "custom" && (
+            <div className="flex flex-col gap-1.5 rounded-lg border border-border/40 bg-background/60 p-3">
+              <label className="text-xs font-medium text-muted-foreground">
+                Custom prefix
+              </label>
+              <input
+                type="text"
+                value={prefixDraft}
+                placeholder="e.g. swaraj or team/wip"
+                spellCheck={false}
+                onChange={(e) => setPrefixDraft(e.target.value)}
+                onBlur={() => {
+                  if (prefixDraft !== branchNamingPrefix) {
+                    setBranchNamingPrefix(prefixDraft);
+                  }
+                }}
+                className="h-8 w-full max-w-[260px] rounded-lg border border-border/50 bg-background px-3 text-[13px] text-foreground outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-border"
+              />
+              <p className="text-xs leading-snug text-muted-foreground">
+                Slash-joined before the slug. Letters, digits, slashes and
+                dashes; leave empty for a bare slug.
+              </p>
+            </div>
+          )}
+        </SettingsRow>
+      </SettingsGroup>
 
       <SubagentsSection />
 
-      <SettingsFrame
-        title="Onboarding"
-        trailing={
-          <Button
-            variant="settings"
-            size="sm"
-            onClick={() => {
-              setView("chat");
-              setOnboardingCompleted(false);
-            }}
-          >
-            Show again
-          </Button>
-        }
-        description="Replay the first-launch welcome flow. Your existing projects and credentials stay put."
-      />
-    </>
+      <SettingsGroup title="Setup">
+        <SettingsRow
+          title="Onboarding"
+          description="Replay the first-launch welcome flow. Your existing projects and credentials stay put."
+          action={
+            <Button
+              variant="settings"
+              size="sm"
+              onClick={() => {
+                setView("chat");
+                setOnboardingCompleted(false);
+              }}
+            >
+              Show again
+            </Button>
+          }
+        />
+      </SettingsGroup>
+    </div>
   );
 }
 
@@ -642,7 +847,8 @@ function ProvidersPane() {
               disabled={loading}
               aria-label="Refresh provider status"
             >
-              <RotateCw
+              <HugeiconsIcon
+                icon={RotateRight01Icon}
                 className={cn("size-3.5", loading && "animate-spin")}
                 aria-hidden
               />
@@ -742,9 +948,7 @@ function WorkspacePane() {
  * + tool subset.
  */
 function SubagentsSection() {
-  const enableForNewSessions = useSubagentsStore(
-    (s) => s.enableForNewSessions,
-  );
+  const enableForNewSessions = useSubagentsStore((s) => s.enableForNewSessions);
   const setEnableForNewSessions = useSubagentsStore(
     (s) => s.setEnableForNewSessions,
   );
@@ -779,7 +983,10 @@ function SubagentsSection() {
               ps.overrides.model ?? preset.definition.model ?? "";
             const rowDisabled = !enableForNewSessions || !ps.enabled;
             return (
-              <div key={preset.name} className="flex flex-col gap-3 px-4 py-3.5">
+              <div
+                key={preset.name}
+                className="flex flex-col gap-3 px-4 py-3.5"
+              >
                 <label className="group flex cursor-pointer items-start gap-3">
                   <Switch
                     checked={ps.enabled && enableForNewSessions}
@@ -906,6 +1113,44 @@ export function SettingsFrame({
 }
 
 /**
+ * Grouped settings section: muted outer frame, compact header, one inner
+ * card split into rows. Use when several related settings should read as a
+ * single decision area instead of separate cards.
+ */
+export function SettingsGroup({
+  title,
+  description,
+  trailing,
+  children,
+}: {
+  title: string;
+  description?: React.ReactNode;
+  trailing?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <Frame>
+      <FrameHeader className="flex flex-row items-start justify-between gap-3 px-2 py-2 w-full">
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <p className="text-sm font-semibold text-foreground">{title}</p>
+          {description && (
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              {description}
+            </p>
+          )}
+        </div>
+        {trailing && <div className="shrink-0 pt-0.5">{trailing}</div>}
+      </FrameHeader>
+      <Card className="overflow-hidden">
+        <div className="flex flex-col divide-y divide-border/40">
+          {children}
+        </div>
+      </Card>
+    </Frame>
+  );
+}
+
+/**
  * Single-surface container for a group of settings rows. Renders one
  * rounded panel with a subtle muted background — no inner card, no double
  * nesting. Pair with `SettingsRow` for the row layout.
@@ -920,7 +1165,7 @@ export function SettingsCard({
   return (
     <div
       className={cn(
-        "flex flex-col divide-y divide-border/40 overflow-hidden rounded-2xl border border-border/40 bg-muted/30",
+        "flex flex-col divide-y divide-border/40 overflow-hidden rounded-lg border border-border/60 bg-muted/30",
         className,
       )}
     >
@@ -940,13 +1185,13 @@ export function SettingsCardHeader({
   title,
   trailing,
 }: {
-  icon?: React.ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
+  icon?: IconSvgElement;
   title: string;
   trailing?: React.ReactNode;
 }) {
   return (
     <header className="flex h-10 shrink-0 items-center gap-2 px-4 text-muted-foreground">
-      {Icon && <Icon className="size-3.5" aria-hidden />}
+      {Icon && <HugeiconsIcon icon={Icon} className="size-3.5" aria-hidden />}
       <span className="min-w-0 flex-1 truncate text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">
         {title}
       </span>
@@ -967,19 +1212,25 @@ export function SettingsRow({
   title,
   description,
   action,
+  className,
   children,
 }: {
-  icon?: React.ComponentType<{ className?: string }>;
+  icon?: IconSvgElement;
   title: string;
   description?: string;
   action?: React.ReactNode;
+  className?: string;
   children?: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-3 px-4 py-3.5">
-      <div className="flex items-center gap-3">
+    <div className={cn("flex flex-col gap-3 px-4 py-3.5", className)}>
+      <div className="flex items-start gap-3">
         {Icon && (
-          <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+          <HugeiconsIcon
+            icon={Icon}
+            className="size-4 shrink-0 text-muted-foreground"
+            aria-hidden
+          />
         )}
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <div className="text-sm font-medium text-foreground">{title}</div>
@@ -989,7 +1240,7 @@ export function SettingsRow({
             </div>
           )}
         </div>
-        {action && <div className="shrink-0">{action}</div>}
+        {action && <div className="shrink-0 pt-0.5">{action}</div>}
       </div>
       {children}
     </div>
@@ -1050,7 +1301,7 @@ export function OptionCard({
   onClick,
   disabled,
 }: {
-  icon?: React.ComponentType<{ className?: string }>;
+  icon?: IconSvgElement;
   iconNode?: React.ReactNode;
   title: string;
   description?: string;
@@ -1082,7 +1333,8 @@ export function OptionCard({
             !compact && "mt-0.5",
           )}
         >
-          {iconNode ?? (Icon ? <Icon className="size-4" /> : null)}
+          {iconNode ??
+            (Icon ? <HugeiconsIcon icon={Icon} className="size-4" /> : null)}
         </span>
       )}
       <span className="flex min-w-0 flex-1 flex-col gap-1">
@@ -1150,7 +1402,8 @@ export function RadioCheck({
       )}
     >
       {active && (
-        <Check
+        <HugeiconsIcon
+          icon={Tick01Icon}
           className="size-2.5 text-primary-foreground"
           strokeWidth={3.5}
           aria-hidden
@@ -1237,7 +1490,8 @@ export function CheckboxInput({
         )}
       >
         {checked && (
-          <Check
+          <HugeiconsIcon
+            icon={Tick01Icon}
             className="size-3 text-background"
             strokeWidth={3.5}
             aria-hidden
@@ -1267,7 +1521,7 @@ export function OverrideField({
   return (
     <div className="flex flex-col gap-2.5">
       <div className="flex items-center gap-2">
-        <div className="inline-flex rounded-md border border-border/50 bg-muted/30 p-0.5 text-xs">
+        <div className="inline-flex rounded-md border border-border/50 bg-muted p-0.5 text-xs">
           <button
             type="button"
             onClick={onClear}
@@ -1322,9 +1576,10 @@ export function ModelSelect({
 }) {
   const models = MODELS_BY_PROVIDER[providerId] ?? [];
   const normalizedValue =
-    value !== null && (models.some((m) => m.id === value) || models.length === 0)
-      ? value ?? ""
-      : models[0]?.id ?? "";
+    value !== null &&
+    (models.some((m) => m.id === value) || models.length === 0)
+      ? (value ?? "")
+      : (models[0]?.id ?? "");
   const items = useMemo(
     () => models.map((m) => ({ value: m.id, label: m.label })),
     [models],
@@ -1368,7 +1623,11 @@ export function ensureValidDefaultsForRuntime(
   const model =
     settings.defaultModelByProvider[provider] ??
     MODELS_BY_PROVIDER[provider][0]!.id;
-  return { providerId: provider, model, runtimeMode: settings.defaultRuntimeMode };
+  return {
+    providerId: provider,
+    model,
+    runtimeMode: settings.defaultRuntimeMode,
+  };
 }
 
 export { PROVIDER_LABEL };

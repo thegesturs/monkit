@@ -1,7 +1,17 @@
 import { describe, expect, it } from "bun:test";
 import { Schema } from "effect";
 
-import { AgentEvent, Chat, Message, Session } from "../src/index.ts";
+import {
+  AgentEvent,
+  Chat,
+  ComposerInput,
+  GitBranchInfo,
+  Message,
+  PokemonPokedexEntry,
+  SettingsFile,
+  Session,
+  Worktree,
+} from "../src/index.ts";
 
 /**
  * These guard the renderer↔server wire contract: every payload that crosses
@@ -20,7 +30,12 @@ describe("AgentEvent round-trips", () => {
   const cases: ReadonlyArray<{ name: string; encoded: unknown }> = [
     {
       name: "Started",
-      encoded: { _tag: "Started", sessionId: "s1", providerId: "claude", mode: "sdk" },
+      encoded: {
+        _tag: "Started",
+        sessionId: "s1",
+        providerId: "claude",
+        mode: "sdk",
+      },
     },
     {
       name: "Status",
@@ -45,7 +60,12 @@ describe("AgentEvent round-trips", () => {
     },
     {
       name: "ToolResult",
-      encoded: { _tag: "ToolResult", itemId: "i4", output: "done", isError: false },
+      encoded: {
+        _tag: "ToolResult",
+        itemId: "i4",
+        output: "done",
+        isError: false,
+      },
     },
     {
       name: "Error",
@@ -75,7 +95,9 @@ describe("AgentEvent round-trips", () => {
   }
 
   it("rejects an event with no _tag", () => {
-    expect(() => Schema.decodeUnknownSync(AgentEvent)({ text: "no tag" })).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(AgentEvent)({ text: "no tag" }),
+    ).toThrow();
   });
 
   it("rejects an unknown _tag", () => {
@@ -86,13 +108,20 @@ describe("AgentEvent round-trips", () => {
 
   it("rejects a known event missing a required field", () => {
     expect(() =>
-      Schema.decodeUnknownSync(AgentEvent)({ _tag: "ToolResult", itemId: "i", output: "o" }),
+      Schema.decodeUnknownSync(AgentEvent)({
+        _tag: "ToolResult",
+        itemId: "i",
+        output: "o",
+      }),
     ).toThrow(); // isError missing
   });
 
   it("rejects an invalid enum literal", () => {
     expect(() =>
-      Schema.decodeUnknownSync(AgentEvent)({ _tag: "Status", status: "spinning" }),
+      Schema.decodeUnknownSync(AgentEvent)({
+        _tag: "Status",
+        status: "spinning",
+      }),
     ).toThrow();
   });
 });
@@ -156,6 +185,48 @@ describe("Message round-trip", () => {
     });
   });
 
+  it("round-trips a rich user message with code annotations", () => {
+    roundTrip(Message, {
+      ...base,
+      role: "user" as const,
+      content: {
+        _tag: "user_rich",
+        text: "please adjust this",
+        attachments: [],
+        fileRefs: [],
+        skillRefs: [],
+        annotations: [
+          {
+            id: "ann1",
+            relPath: "src/app.ts",
+            absPath: "/repo/src/app.ts",
+            startLine: 10,
+            endLine: 12,
+            comment: "make this clearer",
+          },
+        ],
+      },
+    });
+  });
+
+  it("decodes legacy rich user messages without annotations", () => {
+    const decoded = Schema.decodeUnknownSync(Message)({
+      ...base,
+      role: "user" as const,
+      content: {
+        _tag: "user_rich",
+        text: "legacy",
+        attachments: [],
+        fileRefs: [],
+        skillRefs: [],
+      },
+    });
+    expect(decoded.content._tag).toBe("user_rich");
+    if (decoded.content._tag === "user_rich") {
+      expect(decoded.content.annotations).toEqual([]);
+    }
+  });
+
   it("round-trips a tool_use message with unknown input", () => {
     roundTrip(Message, {
       ...base,
@@ -180,6 +251,69 @@ describe("Message round-trip", () => {
   });
 });
 
+describe("Pokemon and Worktree round-trips", () => {
+  it("round-trips an unlocked Pokedex entry", () => {
+    roundTrip(PokemonPokedexEntry, {
+      number: 25,
+      slug: "pikachu",
+      name: "Pikachu",
+      generation: 1,
+      rarity: "rare" as const,
+      points: 75,
+      unlocked: true,
+      unlockedAt: "2026-06-18T00:00:00.000Z",
+      worktreeId: "wt1",
+      spriteUrl: "memoize://pokemon/25",
+      silhouetteUrl:
+        "https://img.pokemondb.net/sprites/scarlet-violet/icon/pikachu.png",
+      variants: [
+        {
+          id: "home",
+          label: "Home",
+          spriteUrl: "memoize://pokemon/25-home",
+        },
+      ],
+      evolutionLine: [
+        {
+          number: 25,
+          slug: "pikachu",
+          name: "Pikachu",
+          rarity: "rare" as const,
+          unlocked: true,
+          spriteUrl: "memoize://pokemon/25",
+          silhouetteUrl:
+            "https://img.pokemondb.net/sprites/scarlet-violet/icon/pikachu.png",
+        },
+      ],
+    });
+  });
+
+  it("round-trips a worktree with Pokémon metadata", () => {
+    roundTrip(Worktree, {
+      id: "wt1",
+      projectId: "proj1",
+      path: "/tmp/pikachu",
+      name: "pikachu",
+      branch: "pikachu",
+      baseBranch: "main",
+      createdAt: "2026-06-18T00:00:00.000Z",
+      setupStatus: "skipped" as const,
+      setupOutput: "",
+      setupStartedAt: null,
+      setupFinishedAt: null,
+      pokemon: {
+        number: 25,
+        slug: "pikachu",
+        name: "Pikachu",
+        generation: 1,
+        rarity: "rare" as const,
+        points: 75,
+        spriteUrl: "memoize://pokemon/25",
+      },
+    });
+  });
+});
+
 describe("Chat round-trip", () => {
   it("round-trips a chat row", () => {
     roundTrip(Chat, {
@@ -189,8 +323,119 @@ describe("Chat round-trip", () => {
       title: "Chat",
       activeSessionId: "sess1",
       archivedAt: null,
+      lastMessageAt: null,
+      lastReadAt: "2026-06-17T00:00:00.000Z",
       createdAt: "2026-06-17T00:00:00.000Z",
       updatedAt: "2026-06-17T00:00:00.000Z",
+    });
+  });
+});
+
+describe("ComposerInput round-trip", () => {
+  it("round-trips code annotations", () => {
+    roundTrip(ComposerInput, {
+      text: "review these",
+      attachments: [],
+      fileRefs: [],
+      skillRefs: [],
+      annotations: [
+        {
+          id: "ann1",
+          relPath: "src/app.ts",
+          absPath: "/repo/src/app.ts",
+          startLine: 4,
+          endLine: 8,
+          comment: "extract this branch",
+        },
+      ],
+    });
+  });
+});
+
+describe("SettingsFile round-trip", () => {
+  it("round-trips completion sound settings", () => {
+    roundTrip(SettingsFile, {
+      schemaVersion: 1,
+      defaultProviderId: "claude",
+      defaultModelByProvider: {
+        claude: "claude-opus-4-8",
+        codex: "gpt-5-codex",
+        grok: "grok-code-fast-1",
+        cursor: "cursor-agent",
+        gemini: "gemini-3-pro",
+        opencode: "sonnet",
+      },
+      defaultRuntimeMode: "approval-required",
+      defaultAutoCreateWorktree: false,
+      onboardingCompleted: true,
+      completionSoundEnabled: true,
+      completionSoundPreset: "bloom",
+      providerEnabled: {
+        claude: true,
+        codex: true,
+        grok: true,
+        cursor: true,
+        gemini: true,
+        opencode: true,
+      },
+      subagents: { enableForNewSessions: true, presets: {} },
+      branchNamingStyle: "username-slug",
+      branchNamingPrefix: "",
+    });
+  });
+
+  it("rejects an unknown completion sound preset", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(SettingsFile)({
+        schemaVersion: 1,
+        defaultProviderId: "claude",
+        defaultModelByProvider: {
+          claude: "claude-opus-4-8",
+          codex: "gpt-5-codex",
+          grok: "grok-code-fast-1",
+          cursor: "cursor-agent",
+          gemini: "gemini-3-pro",
+          opencode: "sonnet",
+        },
+        defaultRuntimeMode: "approval-required",
+        defaultAutoCreateWorktree: false,
+        onboardingCompleted: true,
+        completionSoundEnabled: true,
+        completionSoundPreset: "airhorn",
+        providerEnabled: {
+          claude: true,
+          codex: true,
+          grok: true,
+          cursor: true,
+          gemini: true,
+          opencode: true,
+        },
+        subagents: { enableForNewSessions: true, presets: {} },
+        branchNamingStyle: "username-slug",
+        branchNamingPrefix: "",
+      }),
+    ).toThrow();
+  });
+});
+
+describe("Git branch round-trip", () => {
+  it("round-trips a local branch", () => {
+    roundTrip(GitBranchInfo, {
+      name: "feature/top-bar",
+      current: true,
+      remote: null,
+      upstream: "origin/feature/top-bar",
+      kind: "local" as const,
+    });
+  });
+
+  it("round-trips a remote-only branch", () => {
+    roundTrip(GitBranchInfo, {
+      name: "main",
+      current: false,
+      remote: "origin/main",
+      upstream: null,
+      kind: "remote" as const,
     });
   });
 });

@@ -11,30 +11,39 @@ import type { FolderId, WorktreeId } from "@memoize/wire";
  * Keyed by `(folderId, worktreeId)` so each workspace gets its own list and
  * switching projects/worktrees doesn't shuffle terminals between them.
  */
-export type TerminalCommand = {
-  readonly cmd: string;
-  readonly args: ReadonlyArray<string>;
-};
-
 export type TerminalInstance = {
   readonly id: string;
   readonly title: string;
   readonly cwd: string;
-  /** When set, the PTY runs this command instead of the default shell. */
-  readonly command?: TerminalCommand;
+  readonly command?: {
+    readonly cmd: string;
+    readonly args: ReadonlyArray<string>;
+    readonly env?: Readonly<Record<string, string>>;
+  };
 };
 
 type TerminalsState = {
   readonly byKey: Readonly<Record<string, ReadonlyArray<TerminalInstance>>>;
   readonly activeByKey: Readonly<Record<string, string | null>>;
   readonly ensureSeed: (key: string, cwd: string) => void;
+  /**
+   * Resolve a 0-based slot index to a terminal instance for `key`, appending
+   * fresh instances until the list is long enough. Used by the right-dock
+   * terminal tabs, which carry a workspace-relative `slot` rather than a
+   * pinned instance id (see `ui.ts` PanelInstance). Returns the instance at
+   * `slot`.
+   */
+  readonly ensureSlot: (
+    key: string,
+    slot: number,
+    cwd: string,
+  ) => TerminalInstance;
   readonly add: (key: string, cwd: string) => string;
-  /** Add a terminal that runs a specific command (e.g. a guided setup). */
   readonly addCommand: (
     key: string,
     cwd: string,
     title: string,
-    command: TerminalCommand,
+    command: TerminalInstance["command"],
   ) => string;
   readonly remove: (key: string, id: string) => void;
   readonly setActive: (key: string, id: string) => void;
@@ -73,6 +82,31 @@ export const useTerminalsStore = create<TerminalsState>((set) => ({
         activeByKey: { ...state.activeByKey, [key]: instance.id },
       };
     }),
+  ensureSlot: (key, slot, cwd) => {
+    let result: TerminalInstance | undefined;
+    set((state) => {
+      const list = state.byKey[key] ?? [];
+      if (list.length > slot) {
+        result = list[slot];
+        return state;
+      }
+      const next = [...list];
+      while (next.length <= slot) {
+        next.push({ id: newId(), title: nextTitle(next), cwd });
+      }
+      const instance = next[slot] as TerminalInstance;
+      result = instance;
+      // Only claim focus when the key has none yet — the dock renders each
+      // slot independently, so `activeByKey` is only meaningful to the
+      // worktree `TerminalWorkspace` list path.
+      const active = state.activeByKey[key] ?? instance.id;
+      return {
+        byKey: { ...state.byKey, [key]: next },
+        activeByKey: { ...state.activeByKey, [key]: active },
+      };
+    });
+    return result as TerminalInstance;
+  },
   add: (key, cwd) => {
     const id = newId();
     set((state) => {

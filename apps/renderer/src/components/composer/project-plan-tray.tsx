@@ -1,6 +1,9 @@
-import { CheckListIcon, Tick02Icon } from "@hugeicons/core-free-icons";
+import {
+  ArrowDown01Icon,
+  CheckListIcon,
+  Tick02Icon,
+} from "@hugeicons-pro/core-bulk-rounded";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { ChevronDown } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import type { Message, SessionId } from "@memoize/wire";
@@ -173,8 +176,9 @@ const tasksFromMessages = (messages: ReadonlyArray<Message>): Todo[] => {
 };
 
 /**
- * "Project Plan" panel docked above the composer. Surfaces the agent's latest
- * `TodoWrite` list (all drivers normalize the tool name to `TodoWrite`) as a
+ * "Project Plan" panel docked above the composer. Surfaces the agent's live
+ * plan — reconstructed from the newer `TaskCreate`/`TaskUpdate` tools, falling
+ * back to a legacy `TodoWrite` snapshot — as a
  * glanceable, collapsible progress view: header with an `X of Y Done` count and
  * a spinner while the turn runs, expanding to a timeline of items with per-item
  * status icons. Renders nothing until a session has produced a TodoWrite list,
@@ -196,7 +200,8 @@ export function ProjectPlanTray({ sessionId }: { sessionId: SessionId }) {
 
   const todos = useMemo(() => {
     // Preferred: the newer Task tools (TaskCreate/TaskUpdate), replayed into a
-    // live list. This is what current Claude sessions emit.
+    // live list. This is what current Claude (Agent SDK ≥ 0.2.x) sessions emit
+    // instead of TodoWrite.
     const tasks = tasksFromMessages(messages);
     if (tasks.length > 0) return tasks;
     // Fallback: legacy TodoWrite single-snapshot. Walk newest→oldest and take
@@ -222,7 +227,7 @@ export function ProjectPlanTray({ sessionId }: { sessionId: SessionId }) {
   const allDone = done === total;
 
   return (
-    <div className="mb-1.5 overflow-hidden rounded-xl border border-border/50 bg-card/60">
+    <div className="mb-1.5 overflow-hidden rounded-lg border border-border/60 bg-card">
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
@@ -245,7 +250,8 @@ export function ProjectPlanTray({ sessionId }: { sessionId: SessionId }) {
         {running && !allDone ? (
           <Spinner className="size-3.5 shrink-0 text-muted-foreground" />
         ) : null}
-        <ChevronDown
+        <HugeiconsIcon
+          icon={ArrowDown01Icon}
           className={cn(
             "size-4 shrink-0 text-muted-foreground transition-transform",
             expanded ? "rotate-180" : "",
@@ -308,7 +314,10 @@ function TodoStatusIcon({
     // spinning loader would imply work is still happening when it isn't — and
     // makes the whole composer read as "busy". Show a static filled ring
     // instead to mark "current step, not running".
-    if (running) return <Spinner className="size-3.5 text-primary" />;
+    if (running)
+      return (
+        <Spinner className="size-3.5 text-primary" />
+      );
     return (
       <span
         className="flex size-3.5 items-center justify-center rounded-full border-2 border-primary"

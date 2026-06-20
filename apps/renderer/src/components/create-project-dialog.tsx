@@ -1,4 +1,10 @@
-import { FileCode, FolderPlus, Layers } from "lucide-react";
+import { HugeiconsIcon } from "@hugeicons/react";
+import type { IconSvgElement } from "@hugeicons/react";
+import {
+  FolderAddIcon,
+  Layers01Icon,
+  SourceCodeIcon,
+} from "@hugeicons-pro/core-bulk-rounded";
 import { useEffect, useState } from "react";
 
 import type { ProjectTemplate } from "@memoize/wire";
@@ -16,7 +22,7 @@ import {
   DialogTitle,
 } from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
-import { Diffusion } from "~/components/ui/loaders";
+import { Spinner } from "~/components/ui/spinner";
 import { cn } from "~/lib/utils";
 import { useWorkspaceStore } from "../store/workspace.ts";
 
@@ -29,7 +35,7 @@ interface TemplateCard {
   readonly id: ProjectTemplate;
   readonly name: string;
   readonly blurb: string;
-  readonly icon: React.ComponentType<{ className?: string }>;
+  readonly icon: IconSvgElement;
 }
 
 // Adding a 4th template is a one-line change here + a new branch in
@@ -39,19 +45,19 @@ const TEMPLATES: ReadonlyArray<TemplateCard> = [
     id: "empty",
     name: "Empty",
     blurb: "Blank Git repo",
-    icon: FileCode,
+    icon: SourceCodeIcon,
   },
   {
     id: "nextjs",
     name: "Next.js",
     blurb: "TypeScript, Tailwind, App Router",
-    icon: FolderPlus,
+    icon: FolderAddIcon,
   },
   {
     id: "turborepo",
     name: "Turborepo",
     blurb: "Monorepo with apps + packages",
-    icon: Layers,
+    icon: Layers01Icon,
   },
 ];
 
@@ -113,8 +119,7 @@ export function CreateProjectDialog({
       : isValidName(trimmedName)
         ? null
         : "Use lowercase letters, digits, dashes, underscores. Must start with a letter or digit.";
-  const canSubmit =
-    trimmedName.length > 0 && nameError === null && !submitting;
+  const canSubmit = trimmedName.length > 0 && nameError === null && !submitting;
 
   const submit = async () => {
     if (!canSubmit) return;
@@ -189,7 +194,7 @@ export function CreateProjectDialog({
               />
               <Button
                 type="button"
-                variant="outline"
+                variant="secondary"
                 size="sm"
                 onClick={() => void onBrowse()}
               >
@@ -201,7 +206,6 @@ export function CreateProjectDialog({
           <Field label="Template">
             <div className="grid grid-cols-3 gap-3">
               {TEMPLATES.map((tpl) => {
-                const Icon = tpl.icon;
                 const active = tpl.id === template;
                 return (
                   <button
@@ -209,14 +213,14 @@ export function CreateProjectDialog({
                     key={tpl.id}
                     onClick={() => setTemplate(tpl.id)}
                     className={cn(
-                      "flex flex-col items-center gap-2 rounded-xl border bg-background/40 px-3 py-5 text-center transition-colors",
+                      "flex flex-col items-center gap-2 rounded-md border border-transparent bg-muted px-3 py-5 text-center transition-colors ring-1 ring-inset ring-border/35",
                       active
-                        ? "border-foreground/30 bg-sidebar-accent/40"
-                        : "border-input hover:bg-sidebar-accent/20",
+                        ? "bg-sidebar-accent text-sidebar-accent-foreground ring-foreground/20"
+                        : "hover:bg-sidebar-accent/70",
                     )}
                   >
-                    <span className="flex size-8 items-center justify-center rounded-lg bg-muted/60 text-foreground">
-                      <Icon className="size-4" />
+                    <span className="flex size-8 items-center justify-center rounded-md bg-background text-foreground">
+                      <HugeiconsIcon icon={tpl.icon} className="size-4" />
                     </span>
                     <span className="text-xs font-medium text-foreground">
                       {tpl.name}
@@ -256,14 +260,10 @@ export function CreateProjectDialog({
           )}
         </DialogPanel>
 
-        <DialogFooter variant="bare">
+        <DialogFooter>
           <DialogClose
             render={
-              <Button
-                type="button"
-                variant="ghost"
-                disabled={submitting}
-              >
+              <Button type="button" variant="ghost" disabled={submitting}>
                 Cancel
               </Button>
             }
@@ -277,7 +277,7 @@ export function CreateProjectDialog({
             {submitting ? (
               <>
                 <span className="inline-flex size-3.5 items-center justify-center">
-                  <Diffusion dotSize={3} cellPadding={1} />
+                  <Spinner className="size-3.5" />
                 </span>
                 Creating…
               </>

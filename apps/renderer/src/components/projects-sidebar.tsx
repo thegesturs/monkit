@@ -1,15 +1,20 @@
-import { Effect, Fiber, Stream } from "effect";
+import { HugeiconsIcon } from "@hugeicons/react";
 import {
-  Archive,
-  ArchiveRestore,
-  ChevronDown,
-  ChevronRight,
-  Pencil,
-  Settings,
-  SquarePen,
-  Trash2,
-} from "lucide-react";
-
+  ArrowDown01Icon,
+  ArrowRight01Icon,
+  Delete02Icon,
+  Edit01Icon,
+  HelpCircleIcon,
+  PencilIcon,
+  Settings01Icon,
+  TaskDone01Icon,
+} from "@hugeicons-pro/core-bulk-rounded";
+import {
+  ArchiveArrowDownIcon,
+  ArchiveArrowUpIcon,
+  ArchiveIcon,
+} from "@hugeicons-pro/core-solid-rounded";
+import { Effect, Fiber, Stream } from "effect";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -25,21 +30,32 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
 import { Menu, MenuItem, MenuPopup } from "~/components/ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
+import {
+  deriveChatAttentionState,
+  type ChatAttentionState,
+  mergeChatAttentionStates,
+} from "~/lib/chat-attention-state";
 import { cn, formatCompactNumber } from "~/lib/utils";
 import { resolveAutoWorktreeId } from "../lib/auto-worktree.ts";
+import { noteSessionStatusForCompletionSound } from "../lib/completion-sounds.ts";
 import { formatShortcut } from "../lib/shortcuts.ts";
 import { getRpcClient } from "../lib/rpc-client.ts";
-import { useChatsStore } from "../store/chats.ts";
+import { isChatUnread, useChatsStore } from "../store/chats.ts";
+import { gitDiffStatKey, useGitDiffStatStore } from "../store/git-diff-stat.ts";
 import { useMessagesStore } from "../store/messages.ts";
 import { prStateKey, usePrStateStore } from "../store/pr-state.ts";
 import { useProvidersStore } from "../store/providers.ts";
 import { useSessionsStore } from "../store/sessions.ts";
 import { useSettingsStore } from "../store/settings.ts";
+import {
+  useSidebarMessageStatusStore,
+  useSidebarMessageStatusSubscriptions,
+} from "../store/sidebar-message-status.ts";
 import { useUiStore } from "../store/ui.ts";
 import { useWorkspaceStore } from "../store/workspace.ts";
 import { BranchIcon, type BranchState } from "./branch-icon.tsx";
 import { ProjectAddMenu } from "./project-add-menu.tsx";
-import { Beacon, Diffusion } from "./ui/loaders";
+import { Spinner } from "./ui/spinner";
 
 const initialsOf = (name: string): string => {
   const parts = name.split(/[-_.\s]+/).filter(Boolean);
@@ -65,6 +81,16 @@ const formatRelative = (iso: Date): string => {
   if (hr < 24) return `${hr}h ago`;
   const day = Math.floor(hr / 24);
   return `${day}d ago`;
+};
+
+/** Resolve the chat that owns a session from the renderer session cache. */
+const chatIdForSession = (sessionId: SessionId): ChatId | null => {
+  const buckets = useSessionsStore.getState().sessionsByProject;
+  for (const list of Object.values(buckets)) {
+    const row = list.find((r) => r.id === sessionId);
+    if (row !== undefined) return row.chatId;
+  }
+  return null;
 };
 
 /**
@@ -116,18 +142,40 @@ function useSessionRunningSubscriptions(sessionIds: ReadonlyArray<SessionId>) {
               client.session.streamStatus({ sessionId: id }),
               (event) =>
                 Effect.sync(() => {
-                  useMessagesStore.setState((s) => ({
-                    runningBySession: {
-                      ...s.runningBySession,
-                      [id]: event.status === "running",
-                    },
-                  }));
+                  // Capture the prior running flag BEFORE the status update so
+                  // we can detect the running→idle edge for unread tracking.
+                  const wasRunning =
+                    useMessagesStore.getState().runningBySession[id] === true;
+                  const isRunning = event.status === "running";
+                  noteSessionStatusForCompletionSound(id, event.status);
+                  useMessagesStore
+                    .getState()
+                    .observeSessionStatus(id, event.status);
                   // Mirror the full status into the session row so the
                   // chat surface can branch on `booting` (loading panel)
                   // vs `idle` (composer ready) without a second stream.
                   useSessionsStore
                     .getState()
                     .setSessionStatus(id, event.status);
+                  // running→idle = the agent just produced new output. Light
+                  // the owning chat unread — unless the user is looking at it,
+                  // in which case stamp it read instead. This is the live
+                  // signal that covers every hydrated session, even in
+                  // collapsed/background chats.
+                  if (wasRunning && !isRunning) {
+                    const chatId = chatIdForSession(id);
+                    if (chatId !== null) {
+                      const chats = useChatsStore.getState();
+                      if (chats.selectedChatId === chatId) {
+                        void chats.markRead(chatId);
+                      } else {
+                        chats.noteChatActivity(chatId);
+                      }
+                    }
+                  }
+                  if (event.status === "idle" || event.status === "closed") {
+                    useMessagesStore.getState().flushQueue(id);
+                  }
                 }),
             ),
           );
@@ -210,6 +258,17 @@ export function ProjectsSidebar() {
     hydrateSessions,
   ]);
 
+  // Eagerly hydrate the (lightweight) chat list for EVERY project, regardless
+  // of expansion. This is what lets read/unread — and the cross-project "Next
+  // unread" button — see chats in collapsed/unvisited projects on startup.
+  // Sessions stay lazy (above); the live unread signal only needs them for
+  // projects the user actually opens.
+  useEffect(() => {
+    for (const folder of folders) {
+      if (!(folder.id in chatsByProject)) void hydrateChats(folder.id);
+    }
+  }, [folders, chatsByProject, hydrateChats]);
+
   // PR state is keyed per-session by `(folderId, worktreeId)` because each
   // worktree has its own branch and therefore its own PR. Hydration happens
   // inside `SessionRow` so each row pulls the entry that matches its
@@ -256,6 +315,7 @@ export function ProjectsSidebar() {
     return ids;
   }, [folders, sessionsByProject]);
   useSessionRunningSubscriptions(allSessionIds);
+  useSidebarMessageStatusSubscriptions(allSessionIds);
 
   const onToggleExpanded = (id: FolderId) =>
     setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -302,9 +362,28 @@ export function ProjectsSidebar() {
 
 function SidebarFooter() {
   const setView = useUiStore((s) => s.setView);
+  const setSettingsSection = useUiStore((s) => s.setSettingsSection);
   const view = useUiStore((s) => s.view);
   return (
-    <div className="border-t border-sidebar-border/40 px-2 py-1.5">
+    <div className="flex flex-col gap-0.5 border-t border-sidebar-border/40 px-2 py-1.5">
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              onClick={() => {
+                setSettingsSection({ kind: "pokedex" });
+                setView("settings");
+              }}
+              className="flex w-full items-center gap-2 rounded px-2 py-1 text-[11px] text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+            >
+              <HugeiconsIcon icon={TaskDone01Icon} className="size-3.5" />
+              <span>Pokedex</span>
+            </button>
+          }
+        />
+        <TooltipPopup side="top">Open Pokedex</TooltipPopup>
+      </Tooltip>
       <Tooltip>
         <TooltipTrigger
           render={
@@ -317,7 +396,7 @@ function SidebarFooter() {
                   "bg-sidebar-accent/60 text-sidebar-accent-foreground",
               )}
             >
-              <Settings className="size-3.5" />
+              <HugeiconsIcon icon={Settings01Icon} className="size-3.5" />
               <span>Settings</span>
             </button>
           }
@@ -395,18 +474,33 @@ function ProjectGroup({
     [chats],
   );
 
-  // Surface a busy hint on the collapsed project header when any session
-  // inside any of this project's live chats is running.
+  // Surface the highest-priority attention hint on the collapsed project
+  // header when any session inside this project needs attention.
   const liveSessionIds = useMemo(
     () => projectSessions.filter((s) => s.archivedAt === null).map((s) => s.id),
     [projectSessions],
   );
-  const anyRunning = useMessagesStore((s) =>
-    liveSessionIds.some((id) => s.runningBySession[id] === true),
+  const headerRunning = useMessagesStore((s) =>
+    mergeChatAttentionStates(
+      liveSessionIds.map((id) =>
+        s.runningBySession[id] === true ? "running" : "idle",
+      ),
+    ),
   );
-  const showHeaderBusy = anyRunning && !isExpanded;
+  const headerMessageAttention = useSidebarMessageStatusStore((s) =>
+    mergeChatAttentionStates(
+      liveSessionIds.map((id) =>
+        deriveChatAttentionState(s.messagesBySession[id] ?? [], false),
+      ),
+    ),
+  );
+  const headerAttention = mergeChatAttentionStates([
+    headerRunning,
+    headerMessageAttention,
+  ]);
+  const showHeaderAttention = headerAttention !== "idle" && !isExpanded;
 
-  const Chevron = isExpanded ? ChevronDown : ChevronRight;
+  const chevron = isExpanded ? ArrowDown01Icon : ArrowRight01Icon;
 
   return (
     <Fragment>
@@ -439,7 +533,7 @@ function ProjectGroup({
               className={cn(
                 "col-start-1 row-start-1 size-5 rounded transition-opacity duration-150 ease-out",
                 "group-hover:opacity-0 motion-reduce:transition-none",
-                showHeaderBusy && "opacity-0",
+                showHeaderAttention && "opacity-0",
               )}
             >
               {avatarUrl !== null && (
@@ -449,24 +543,18 @@ function ProjectGroup({
                 {fallbackText}
               </AvatarFallback>
             </Avatar>
-            {showHeaderBusy && (
-              <span
+            {showHeaderAttention && (
+              <ChatAttentionIcon
+                state={headerAttention}
                 className={cn(
-                  "col-start-1 row-start-1 inline-flex size-3.5 items-center justify-center text-foreground transition-opacity duration-150 ease-out",
+                  "col-start-1 row-start-1 transition-opacity duration-150 ease-out",
                   "group-hover:opacity-0 motion-reduce:transition-none",
                 )}
-                aria-label="Agent is working in a session"
-                title="Agent is working in a session"
-              >
-                <Beacon
-                  dotSize={3}
-                  cellPadding={0.75}
-                  speed={1.8}
-                  color="currentColor"
-                />
-              </span>
+                context="project"
+              />
             )}
-            <Chevron
+            <HugeiconsIcon
+              icon={chevron}
               aria-hidden="true"
               className={cn(
                 "col-start-1 row-start-1 size-3.5 text-muted-foreground opacity-0 transition-opacity duration-150 ease-out",
@@ -490,7 +578,7 @@ function ProjectGroup({
             aria-label={`Settings for ${displayName}`}
             title="Repository settings"
           >
-            <Settings className="size-3.5" />
+            <HugeiconsIcon icon={Settings01Icon} className="size-3.5" />
           </button>
           <NewChatButton projectId={id} />
         </div>
@@ -548,21 +636,21 @@ function ProjectContextMenu({
           onClick={onOpenSettings}
           className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-sidebar-accent"
         >
-          <Settings className="size-3.5" />
+          <HugeiconsIcon icon={Settings01Icon} className="size-3.5" />
           Settings
         </MenuItem>
         <MenuItem
           onClick={onOpenArchives}
           className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-sidebar-accent"
         >
-          <Archive className="size-3.5" />
+          <HugeiconsIcon icon={ArchiveIcon} className="size-3.5" />
           Archived chats
         </MenuItem>
         <MenuItem
           onClick={onRemove}
           className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs text-red-300 hover:bg-red-500/20"
         >
-          <Trash2 className="size-3.5" />
+          <HugeiconsIcon icon={Delete02Icon} className="size-3.5" />
           Remove project
         </MenuItem>
       </MenuPopup>
@@ -640,10 +728,10 @@ function NewChatButton({ projectId }: { projectId: FolderId }) {
           >
             {creating ? (
               <span className="inline-flex size-3.5 items-center justify-center">
-                <Diffusion dotSize={3} cellPadding={1} />
+                <Spinner className="size-3.5" />
               </span>
             ) : (
-              <SquarePen className="size-3.5" />
+              <HugeiconsIcon icon={Edit01Icon} className="size-3.5" />
             )}
           </button>
         }
@@ -700,6 +788,16 @@ function ChatRow({ chat }: { chat: Chat }) {
     void hydratePrState(chat.projectId, chat.worktreeId);
   }, [hydratePrState, chat.projectId, chat.worktreeId]);
 
+  // Per-branch diff stats (additions/deletions vs base), shown even when no
+  // PR exists yet — so a working branch surfaces its size in the sidebar.
+  const diffStat = useGitDiffStatStore(
+    (s) => s.byKey[gitDiffStatKey(chat.projectId, chat.worktreeId)] ?? null,
+  );
+  const hydrateDiffStat = useGitDiffStatStore((s) => s.hydrate);
+  useEffect(() => {
+    void hydrateDiffStat(chat.projectId, chat.worktreeId);
+  }, [hydrateDiffStat, chat.projectId, chat.worktreeId]);
+
   // Ids of this chat's non-archived sessions — so the sidebar busy
   // indicator reflects ANY tab being active, not just the currently
   // selected one.
@@ -711,12 +809,24 @@ function ChatRow({ chat }: { chat: Chat }) {
     [sessionsByProject, chat.projectId, chat.id],
   );
 
-  const isRunning = useMessagesStore((s) => {
-    for (const id of sessionIds) {
-      if (s.runningBySession[id] === true) return true;
-    }
-    return false;
-  });
+  const runningAttention = useMessagesStore((s) =>
+    mergeChatAttentionStates(
+      sessionIds.map((id) =>
+        s.runningBySession[id] === true ? "running" : "idle",
+      ),
+    ),
+  );
+  const messageAttention = useSidebarMessageStatusStore((s) =>
+    mergeChatAttentionStates(
+      sessionIds.map((id) =>
+        deriveChatAttentionState(s.messagesBySession[id] ?? [], false),
+      ),
+    ),
+  );
+  const attentionState = mergeChatAttentionStates([
+    runningAttention,
+    messageAttention,
+  ]);
 
   // Highlight this row when its own chat is selected, OR when the active
   // session (any tab inside this chat) lives in it. Covers the transient
@@ -727,20 +837,33 @@ function ChatRow({ chat }: { chat: Chat }) {
   }, [selectedSessionId, sessionIds]);
   const isSelected = selectedChatId === chat.id || sessionBelongsToChat;
   const isArchived = chat.archivedAt !== null;
+  // Unread = new activity the user hasn't seen. Never on the selected row.
+  const isUnread = !isSelected && isChatUnread(chat, selectedChatId);
 
-  const branchState: BranchState =
-    prInfo === null
+  const branchState: BranchState = isArchived
+    ? "archived"
+    : prInfo === null || prInfo.state === "none"
       ? "default"
-      : prInfo.state === "open"
-        ? "pr-open"
-        : prInfo.state === "merged" || prInfo.state === "closed"
+      : prInfo.state === "merged"
+        ? "pr-merged"
+        : prInfo.state === "closed"
           ? "pr-closed"
-          : "default";
-  const showDiff =
-    prInfo !== null &&
-    (prInfo.state === "open" ||
-      prInfo.state === "merged" ||
-      prInfo.state === "closed");
+          : // open PR — reflect CI / conflict status
+            prInfo.checks === "failure" || prInfo.mergeable === "conflicting"
+            ? "pr-failing"
+            : prInfo.checks === "pending"
+              ? "pr-pending"
+              : "pr-open";
+
+  // Prefer the live branch diff (works without a PR); fall back to the PR's
+  // own counts so merged/closed branches still show their size.
+  const stats =
+    diffStat !== null && (diffStat.additions > 0 || diffStat.deletions > 0)
+      ? diffStat
+      : prInfo !== null && (prInfo.additions > 0 || prInfo.deletions > 0)
+        ? { additions: prInfo.additions, deletions: prInfo.deletions }
+        : null;
+  const showDiff = stats !== null;
 
   const onRename = () => {
     const next = window.prompt("Rename chat", chat.title);
@@ -770,7 +893,7 @@ function ChatRow({ chat }: { chat: Chat }) {
     setMenuOpen(true);
   };
 
-  const PrimaryActionIcon = isArchived ? ArchiveRestore : Archive;
+  const primaryActionIcon = isArchived ? ArchiveArrowUpIcon : ArchiveArrowDownIcon;
   const primaryActionLabel = isArchived ? "Unarchive" : "Archive";
 
   return (
@@ -792,26 +915,24 @@ function ChatRow({ chat }: { chat: Chat }) {
           !isSelected &&
             isArchived &&
             "text-muted-foreground hover:bg-sidebar-accent/40",
-          !isSelected && !isArchived && "hover:bg-sidebar-accent/40",
+          // Read rows sit dim; unread rows brighten + bold so new activity pops.
+          !isSelected &&
+            !isArchived &&
+            !isUnread &&
+            "text-muted-foreground hover:bg-sidebar-accent/40",
+          !isSelected &&
+            !isArchived &&
+            isUnread &&
+            "font-bold text-white hover:bg-sidebar-accent/40",
         )}
         title={chat.title}
       >
-        {isRunning ? (
-          <span
-            className={cn(
-              "ml-3 inline-flex size-3.5 shrink-0 items-center justify-center",
-              isSelected ? "text-sidebar-accent-foreground" : "text-foreground",
-            )}
-            aria-label="Agent is working"
-            title="Agent is working"
-          >
-            <Beacon
-              dotSize={3}
-              cellPadding={0.75}
-              speed={1.8}
-              color="currentColor"
-            />
-          </span>
+        {attentionState !== "idle" ? (
+          <ChatAttentionIcon
+            state={attentionState}
+            selected={isSelected}
+            className="ml-3"
+          />
         ) : (
           <BranchIcon
             state={branchState}
@@ -822,13 +943,13 @@ function ChatRow({ chat }: { chat: Chat }) {
         <span className="min-w-0 flex-1 truncate">{chat.title}</span>
         <div className="relative flex h-4 w-16 shrink-0 items-center justify-end">
           <span className="tabular-nums text-[10px] text-muted-foreground transition-opacity duration-150 ease-out motion-reduce:transition-none group-hover:hidden">
-            {showDiff && prInfo !== null ? (
+            {showDiff && stats !== null ? (
               <>
-                <span className="text-emerald-400">
-                  +{formatCompactNumber(prInfo.additions)}
+                <span className="text-success">
+                  +{formatCompactNumber(stats.additions)}
                 </span>{" "}
-                <span className="text-red-400">
-                  −{formatCompactNumber(prInfo.deletions)}
+                <span className="text-destructive">
+                  −{formatCompactNumber(stats.deletions)}
                 </span>
               </>
             ) : (
@@ -845,7 +966,7 @@ function ChatRow({ chat }: { chat: Chat }) {
             aria-label={`${primaryActionLabel} ${chat.title}`}
             title={primaryActionLabel}
           >
-            <PrimaryActionIcon className="size-3.5" />
+            <HugeiconsIcon icon={primaryActionIcon} className="size-3.5" />
           </button>
         </div>
       </li>
@@ -860,7 +981,7 @@ function ChatRow({ chat }: { chat: Chat }) {
             onClick={onRename}
             className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-sidebar-accent"
           >
-            <Pencil className="size-3.5" />
+            <HugeiconsIcon icon={PencilIcon} className="size-3.5" />
             Rename
           </MenuItem>
           {isArchived ? (
@@ -868,7 +989,7 @@ function ChatRow({ chat }: { chat: Chat }) {
               onClick={() => void unarchiveChat(chat.id)}
               className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-sidebar-accent"
             >
-              <ArchiveRestore className="size-3.5" />
+              <HugeiconsIcon icon={ArchiveArrowUpIcon} className="size-3.5" />
               Unarchive
             </MenuItem>
           ) : (
@@ -876,7 +997,7 @@ function ChatRow({ chat }: { chat: Chat }) {
               onClick={() => void archiveChat(chat.id)}
               className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-sidebar-accent"
             >
-              <Archive className="size-3.5" />
+              <HugeiconsIcon icon={ArchiveArrowDownIcon} className="size-3.5" />
               Archive
             </MenuItem>
           )}
@@ -884,11 +1005,65 @@ function ChatRow({ chat }: { chat: Chat }) {
             onClick={onDelete}
             className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs text-red-300 hover:bg-red-500/20"
           >
-            <Trash2 className="size-3.5" />
+            <HugeiconsIcon icon={Delete02Icon} className="size-3.5" />
             Delete
           </MenuItem>
         </MenuPopup>
       </Menu>
     </>
+  );
+}
+
+function ChatAttentionIcon({
+  state,
+  selected = false,
+  className,
+  context = "chat",
+}: {
+  state: ChatAttentionState;
+  selected?: boolean;
+  className?: string;
+  context?: "chat" | "project";
+}) {
+  if (state === "idle") return null;
+
+  const color = selected
+    ? "text-sidebar-accent-foreground"
+    : state === "question"
+      ? "text-amber-300"
+      : state === "planReady"
+        ? "text-emerald-300"
+        : "text-foreground";
+  const label =
+    state === "question"
+      ? context === "project"
+        ? "A chat is waiting for your answer"
+        : "Waiting for your answer"
+      : state === "planReady"
+        ? context === "project"
+          ? "A chat has a plan ready to approve"
+          : "Plan ready to approve"
+        : context === "project"
+          ? "Agent is working in a session"
+          : "Agent is working";
+
+  return (
+    <span
+      className={cn(
+        "inline-flex size-3.5 shrink-0 items-center justify-center",
+        color,
+        className,
+      )}
+      aria-label={label}
+      title={label}
+    >
+      {state === "running" ? (
+        <Spinner className="size-4" />
+      ) : state === "question" ? (
+        <HugeiconsIcon icon={HelpCircleIcon} className="size-3.5" />
+      ) : (
+        <HugeiconsIcon icon={TaskDone01Icon} className="size-3.5" />
+      )}
+    </span>
   );
 }

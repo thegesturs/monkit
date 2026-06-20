@@ -15,6 +15,36 @@ const Status = MemoizeRpcs.toLayerHandler(
     ),
 );
 
+const Branches = MemoizeRpcs.toLayerHandler(
+  "git.branches",
+  ({ folderId, worktreeId }) =>
+    Effect.flatMap(GitService, (svc) =>
+      svc.branches(folderId, worktreeId ?? null),
+    ),
+);
+
+const SwitchBranch = MemoizeRpcs.toLayerHandler(
+  "git.switchBranch",
+  ({ folderId, worktreeId, branch, remote }) =>
+    Effect.flatMap(GitService, (svc) =>
+      svc.switchBranch(folderId, branch, remote ?? null, worktreeId ?? null),
+    ),
+);
+
+const RenameBranch = MemoizeRpcs.toLayerHandler(
+  "git.renameBranch",
+  ({ folderId, worktreeId, name }) =>
+    Effect.flatMap(GitService, (svc) =>
+      svc.renameBranch(folderId, name, worktreeId ?? null),
+    ),
+);
+
+const UserName = MemoizeRpcs.toLayerHandler("git.userName", ({ folderId }) =>
+  Effect.flatMap(GitService, (svc) =>
+    svc.getUserName(folderId).pipe(Effect.map((userName) => ({ userName }))),
+  ),
+);
+
 const HeadChanged = MemoizeRpcs.toLayerHandler(
   "git.headChanged",
   ({ folderId }) =>
@@ -61,9 +91,9 @@ const Diff = MemoizeRpcs.toLayerHandler(
 
 const Commit = MemoizeRpcs.toLayerHandler(
   "git.commit",
-  ({ folderId, worktreeId, message }) =>
+  ({ folderId, worktreeId, message, paths }) =>
     Effect.flatMap(GitService, (svc) =>
-      svc.commit(folderId, message, worktreeId ?? null),
+      svc.commit(folderId, message, worktreeId ?? null, paths),
     ),
 );
 
@@ -89,6 +119,30 @@ const MarkReady = MemoizeRpcs.toLayerHandler(
     ),
 );
 
+const RevertFile = MemoizeRpcs.toLayerHandler(
+  "git.revertFile",
+  ({ folderId, worktreeId, path, oldPath, kind }) =>
+    Effect.flatMap(GitService, (svc) =>
+      svc.revertFile(folderId, path, kind, oldPath ?? null, worktreeId ?? null),
+    ),
+);
+
+const RevertAll = MemoizeRpcs.toLayerHandler(
+  "git.revertAll",
+  ({ folderId, worktreeId }) =>
+    Effect.flatMap(GitService, (svc) =>
+      svc.revertAll(folderId, worktreeId ?? null),
+    ),
+);
+
+const DiffStat = MemoizeRpcs.toLayerHandler(
+  "git.diffStat",
+  ({ folderId, worktreeId }) =>
+    Effect.flatMap(GitService, (svc) =>
+      svc.diffStat(folderId, worktreeId ?? null),
+    ),
+);
+
 const Init = MemoizeRpcs.toLayerHandler("git.init", ({ folderId }) =>
   Effect.flatMap(GitService, (svc) => svc.init(folderId)),
 );
@@ -104,6 +158,10 @@ const FixFailingChecks = MemoizeRpcs.toLayerHandler(
 export const GitHandlersLayer = Layer.mergeAll(
   Log,
   Status,
+  Branches,
+  SwitchBranch,
+  RenameBranch,
+  UserName,
   HeadChanged,
   Origin,
   PrState,
@@ -115,5 +173,8 @@ export const GitHandlersLayer = Layer.mergeAll(
   MergePr,
   MarkReady,
   Init,
+  RevertFile,
+  RevertAll,
+  DiffStat,
   FixFailingChecks,
 );

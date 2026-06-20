@@ -3,12 +3,19 @@ import { Schema } from "effect";
 
 import {
   AgentDefinition,
+  ContextUsagePrecision,
   PermissionMode,
   ProviderId,
   RuntimeMode,
   UserQuestion,
 } from "./agent.ts";
-import { AttachmentRef, ComposerInput, FileRef, SkillRef } from "./composer.ts";
+import {
+  AttachmentRef,
+  CodeAnnotation,
+  ComposerInput,
+  FileRef,
+  SkillRef,
+} from "./composer.ts";
 import {
   AgentItemId,
   AgentSessionId,
@@ -150,6 +157,7 @@ export type MessageRole = typeof MessageRole.Type;
 
 const UserContent = Schema.TaggedStruct("user", {
   text: Schema.String,
+  goal: Schema.optional(Schema.Boolean),
 });
 
 /**
@@ -163,6 +171,12 @@ const UserRichContent = Schema.TaggedStruct("user_rich", {
   attachments: Schema.Array(AttachmentRef),
   fileRefs: Schema.Array(FileRef),
   skillRefs: Schema.Array(SkillRef),
+  // Additive + back-compat: rows persisted before code annotations existed
+  // decode with an empty list rather than failing.
+  annotations: Schema.optionalWith(Schema.Array(CodeAnnotation), {
+    default: () => [],
+  }),
+  goal: Schema.optional(Schema.Boolean),
 });
 
 const AssistantContent = Schema.TaggedStruct("assistant", {
@@ -230,6 +244,24 @@ const UsageContent = Schema.TaggedStruct("usage", {
   model: Schema.String,
 });
 
+const ContextUsageContent = Schema.TaggedStruct("context_usage", {
+  providerId: ProviderId,
+  usedTokens: Schema.NullOr(Schema.Number),
+  windowTokens: Schema.NullOr(Schema.Number),
+  precision: ContextUsagePrecision,
+  source: Schema.optional(Schema.String),
+});
+
+const UsageLimitContent = Schema.TaggedStruct("usage_limit", {
+  providerId: ProviderId,
+  label: Schema.String,
+  usedPercent: Schema.NullOr(Schema.Number),
+  // ISO-8601 string — see `UsageLimitEvent` in agent.ts for why this isn't
+  // a `Date` schema (constructor validates against the decoded `Date`).
+  resetsAt: Schema.NullOr(Schema.String),
+  windowMinutes: Schema.NullOr(Schema.Number),
+});
+
 /**
  * Persisted form of a `UserQuestion` event. `itemId` is the SDK's
  * `tool_use.id` for the AskUserQuestion call; the paired
@@ -275,6 +307,8 @@ export const MessageContent = Schema.Union(
   ErrorContent,
   SubagentSummaryContent,
   UsageContent,
+  ContextUsageContent,
+  UsageLimitContent,
   UserQuestionContent,
   UserQuestionAnswerContent,
 );
@@ -290,6 +324,17 @@ export class Message extends Schema.Class<Message>("Message")({
   createdAt: Schema.DateFromString,
 }) {}
 
+export class QueuedMessage extends Schema.Class<QueuedMessage>("QueuedMessage")(
+  {
+    id: Schema.String,
+    sessionId: SessionId,
+    input: ComposerInput,
+    position: Schema.Number,
+    createdAt: Schema.DateFromString,
+    updatedAt: Schema.DateFromString,
+  },
+) {}
+
 export class SessionNotFoundError extends Schema.TaggedError<SessionNotFoundError>()(
   "SessionNotFoundError",
   { sessionId: SessionId },
@@ -299,6 +344,39 @@ export class SessionStartError extends Schema.TaggedError<SessionStartError>()(
   "SessionStartError",
   { providerId: ProviderId, reason: Schema.String },
 ) {}
+
+export class GoalUnsupportedError extends Schema.TaggedError<GoalUnsupportedError>()(
+  "GoalUnsupportedError",
+  { providerId: ProviderId },
+) {}
+
+export const ThreadGoalStatus = Schema.Literal(
+  "active",
+  "paused",
+  "budgetLimited",
+  "usageLimited",
+  "blocked",
+  "complete",
+);
+export type ThreadGoalStatus = typeof ThreadGoalStatus.Type;
+
+export class ThreadGoal extends Schema.Class<ThreadGoal>("ThreadGoal")({
+  threadId: Schema.String,
+  objective: Schema.String,
+  status: ThreadGoalStatus,
+  tokenBudget: Schema.NullOr(Schema.Number),
+  tokensUsed: Schema.Number,
+  timeUsedSeconds: Schema.Number,
+  createdAt: Schema.Number,
+  updatedAt: Schema.Number,
+}) {}
+
+export const ThreadGoalSetInput = Schema.Struct({
+  objective: Schema.optional(Schema.String),
+  status: Schema.optional(ThreadGoalStatus),
+  tokenBudget: Schema.optional(Schema.NullOr(Schema.Number)),
+});
+export type ThreadGoalSetInput = typeof ThreadGoalSetInput.Type;
 
 /**
  * Reported by `messages.steer` if the active provider cannot interrupt the
@@ -454,6 +532,15 @@ export class Chat extends Schema.Class<Chat>("Chat")({
   title: Schema.String,
   activeSessionId: Schema.NullOr(SessionId),
   archivedAt: Schema.NullOr(Schema.DateFromString),
+  /**
+   * Read/unread tracking. `lastMessageAt` advances every time a message is
+   * persisted in any of the chat's sessions; `lastReadAt` advances when the
+   * user views the chat. A chat is unread when `lastMessageAt > lastReadAt`.
+   * `lastMessageAt` is null until the first message; `lastReadAt` is seeded to
+   * the creation time so a freshly created chat starts read.
+   */
+  lastMessageAt: Schema.NullOr(Schema.DateFromString),
+  lastReadAt: Schema.NullOr(Schema.DateFromString),
   createdAt: Schema.DateFromString,
   updatedAt: Schema.DateFromString,
 }) {}
@@ -573,12 +660,34 @@ export const ChatRenameRpc = Rpc.make("chat.rename", {
 });
 
 /**
+ * Live feed of chat-row changes (title / worktree binding) for one project.
+ * Carries only live patches — no backfill — so the renderer keeps its
+ * `chat.list` snapshot and patches it as updates arrive (e.g. the background
+ * auto-namer rewriting a new chat's title after its first message).
+ */
+export const ChatStreamChangesRpc = Rpc.make("chat.streamChanges", {
+  payload: Schema.Struct({ projectId: FolderId }),
+  success: Chat,
+  stream: true,
+});
+
+/**
  * Change the chat's worktree. Allowed only when no session in the chat has
  * any user message yet — fails with `ChatAlreadyStartedError` otherwise.
  * Updates `chat.worktreeId` AND mirrors the change onto every member
  * session's `worktreeId` so renderer reads of `session.worktreeId` stay
  * accurate without a second round-trip.
  */
+/**
+ * Mark a chat read by stamping `last_read_at` to "now". Returns the refreshed
+ * chat so the renderer can reconcile its optimistic patch. Idempotent.
+ */
+export const ChatMarkReadRpc = Rpc.make("chat.markRead", {
+  payload: Schema.Struct({ chatId: ChatId }),
+  success: Chat,
+  error: ChatNotFoundError,
+});
+
 export const ChatSetWorktreeRpc = Rpc.make("chat.setWorktree", {
   payload: Schema.Struct({
     chatId: ChatId,
@@ -652,12 +761,78 @@ export const MessagesSendRpc = Rpc.make("messages.send", {
     sessionId: SessionId,
     text: Schema.optional(Schema.String),
     input: Schema.optional(ComposerInput),
+    asGoal: Schema.optional(Schema.Boolean),
   }),
   success: Schema.Void,
   error: SessionNotFoundError,
 });
 
 export const MessagesInterruptRpc = Rpc.make("messages.interrupt", {
+  payload: Schema.Struct({ sessionId: SessionId }),
+  success: Schema.Void,
+  error: SessionNotFoundError,
+});
+
+export const MessagesQueueListRpc = Rpc.make("messages.queue.list", {
+  payload: Schema.Struct({ sessionId: SessionId }),
+  success: Schema.Array(QueuedMessage),
+  error: SessionNotFoundError,
+});
+
+export const MessagesQueueStreamRpc = Rpc.make("messages.queue.stream", {
+  payload: Schema.Struct({ sessionId: SessionId }),
+  success: Schema.Array(QueuedMessage),
+  error: SessionNotFoundError,
+  stream: true,
+});
+
+export const MessagesQueueAddRpc = Rpc.make("messages.queue.add", {
+  payload: Schema.Struct({
+    sessionId: SessionId,
+    input: ComposerInput,
+  }),
+  success: QueuedMessage,
+  error: SessionNotFoundError,
+});
+
+export const MessagesQueueUpdateRpc = Rpc.make("messages.queue.update", {
+  payload: Schema.Struct({
+    sessionId: SessionId,
+    queueId: Schema.String,
+    input: ComposerInput,
+  }),
+  success: QueuedMessage,
+  error: SessionNotFoundError,
+});
+
+export const MessagesQueueDeleteRpc = Rpc.make("messages.queue.delete", {
+  payload: Schema.Struct({
+    sessionId: SessionId,
+    queueId: Schema.String,
+  }),
+  success: Schema.Void,
+  error: SessionNotFoundError,
+});
+
+export const MessagesQueueSendNowRpc = Rpc.make("messages.queue.sendNow", {
+  payload: Schema.Struct({
+    sessionId: SessionId,
+    queueId: Schema.String,
+  }),
+  success: Schema.Void,
+  error: SessionNotFoundError,
+});
+
+export const MessagesQueueReorderRpc = Rpc.make("messages.queue.reorder", {
+  payload: Schema.Struct({
+    sessionId: SessionId,
+    queueIds: Schema.Array(Schema.String),
+  }),
+  success: Schema.Array(QueuedMessage),
+  error: SessionNotFoundError,
+});
+
+export const MessagesQueueFlushRpc = Rpc.make("messages.queue.flush", {
   payload: Schema.Struct({ sessionId: SessionId }),
   success: Schema.Void,
   error: SessionNotFoundError,
@@ -752,5 +927,40 @@ export const SessionStatusStreamRpc = Rpc.make("session.streamStatus", {
   payload: Schema.Struct({ sessionId: SessionId }),
   success: Schema.Struct({ sessionId: SessionId, status: SessionStatus }),
   error: SessionNotFoundError,
+  stream: true,
+});
+
+export const SessionGoalGetRpc = Rpc.make("session.goal.get", {
+  payload: Schema.Struct({ sessionId: SessionId }),
+  success: Schema.NullOr(ThreadGoal),
+  error: Schema.Union(SessionNotFoundError, GoalUnsupportedError),
+});
+
+export const SessionGoalSetRpc = Rpc.make("session.goal.set", {
+  payload: Schema.Struct({
+    sessionId: SessionId,
+    goal: ThreadGoalSetInput,
+  }),
+  success: ThreadGoal,
+  error: Schema.Union(
+    SessionNotFoundError,
+    SessionStartError,
+    GoalUnsupportedError,
+  ),
+});
+
+export const SessionGoalClearRpc = Rpc.make("session.goal.clear", {
+  payload: Schema.Struct({ sessionId: SessionId }),
+  success: Schema.Void,
+  error: Schema.Union(SessionNotFoundError, GoalUnsupportedError),
+});
+
+export const SessionGoalStreamRpc = Rpc.make("session.goal.stream", {
+  payload: Schema.Struct({ sessionId: SessionId }),
+  success: Schema.Struct({
+    sessionId: SessionId,
+    goal: Schema.NullOr(ThreadGoal),
+  }),
+  error: Schema.Union(SessionNotFoundError, GoalUnsupportedError),
   stream: true,
 });

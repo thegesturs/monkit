@@ -86,8 +86,6 @@ export const DEFAULT_PERMISSION_MODE: PermissionMode = "default";
  *   - Claude → `maxThinkingTokens` (low=5k, medium=15k, high=60k) + SDK
  *     `effort` enum (low/medium/high/xhigh/max). `ultracode` is a Claude
  *     Code preset that normalizes to `xhigh` + `settings.ultracode: true`.
- *     `ultrathink` is prompt-injected (the literal word is prepended to the
- *     user prompt); SDK `effort` stays unset.
  *   - Codex → `reasoning_effort` enum (low/medium/high pass through; higher
  *     tiers fall back to `high`).
  *   - Gemini Pro → `thinkingConfig.thinkingBudget` (low=4k, medium=16k, high=32k)
@@ -102,7 +100,6 @@ export const ReasoningLevel = Schema.Literal(
   "xhigh",
   "max",
   "ultracode",
-  "ultrathink",
 );
 export type ReasoningLevel = typeof ReasoningLevel.Type;
 
@@ -122,9 +119,8 @@ export const SelectOptionDescriptor = Schema.Struct({
   /**
    * Option ids in this list are *prompt-injected* rather than forwarded to
    * the SDK as a knob value. The driver prepends the option id (e.g. the
-   * literal word `"ultrathink"`) to the user prompt and unsets the
-   * underlying SDK field. Used by Claude's `effort` descriptor for the
-   * `ultrathink` tier.
+   * literal word for a prompt-only mode) to the user prompt and unsets the
+   * underlying SDK field.
    */
   promptInjectedValues: Schema.optional(Schema.Array(Schema.String)),
 });
@@ -157,6 +153,20 @@ export type OptionDescriptor = typeof OptionDescriptor.Type;
  */
 export const CliVersionStatus = Schema.Literal("ok", "outdated", "unknown");
 export type CliVersionStatus = typeof CliVersionStatus.Type;
+
+/**
+ * Version-gated Codex features. The installed Codex CLI only speaks these on
+ * recent releases, so we surface support as a capability list on
+ * {@link AgentAvailability} (computed from `cliVersion` against per-feature
+ * floors in `availability.ts`) and the renderer shows/hides the matching
+ * control. Adding a feature here is additive — pair it with a floor in
+ * `CODEX_FEATURE_FLOORS` and a UI gate.
+ *
+ *   - `goalMode` — `thread/goal/*` RPCs (the goal banner + `/goal`).
+ *   - `fastMode` — `serviceTier: "fast"` on `turn/start` (1.5× speed tier).
+ */
+export const CodexFeature = Schema.Literal("goalMode", "fastMode");
+export type CodexFeature = typeof CodexFeature.Type;
 
 /**
  * Per-provider verdict on whether a *newer published release* exists, distinct
@@ -238,6 +248,16 @@ export const AgentAvailability = Schema.Struct({
    * tandem with `cliVersionStatus`; rendered inside the upgrade card.
    */
   cliVersionMinRequired: Schema.optional(Schema.String),
+  /**
+   * Version-gated features the *installed CLI* supports, computed by comparing
+   * `cliVersion` against per-feature floors (see `CODEX_FEATURE_FLOORS` in
+   * availability.ts). Values are {@link CodexFeature} ids. Empty/omitted when
+   * the version is unknown or no features are gated for this provider. The
+   * renderer reads this to show/hide feature controls *before* a session
+   * exists (the live `model/list` `serviceTiers` refine it per-model once a
+   * session is connected — see the `Capabilities` event).
+   */
+  capabilities: Schema.optional(Schema.Array(Schema.String)),
   /**
    * One-line shell command we recommend the user run to fix an outdated
    * CLI. Co-located with the version probe so renderer doesn't need its
@@ -440,6 +460,32 @@ const UsageDeltaEvent = Schema.TaggedStruct("UsageDelta", {
   model: Schema.String,
 });
 
+export const ContextUsagePrecision = Schema.Literal(
+  "exact",
+  "estimated",
+  "capacity-only",
+);
+export type ContextUsagePrecision = typeof ContextUsagePrecision.Type;
+
+const ContextUsageEvent = Schema.TaggedStruct("ContextUsage", {
+  providerId: ProviderId,
+  usedTokens: Schema.NullOr(Schema.Number),
+  windowTokens: Schema.NullOr(Schema.Number),
+  precision: ContextUsagePrecision,
+  source: Schema.optional(Schema.String),
+});
+
+const UsageLimitEvent = Schema.TaggedStruct("UsageLimit", {
+  providerId: ProviderId,
+  label: Schema.String,
+  usedPercent: Schema.NullOr(Schema.Number),
+  // ISO-8601 string, not a `Date` schema: the value crosses IPC and the
+  // persistence layer as JSON, and a `DateFromString` transform trips the
+  // struct constructor (which validates against the decoded `Date` side).
+  resetsAt: Schema.NullOr(Schema.String),
+  windowMinutes: Schema.NullOr(Schema.Number),
+});
+
 const CompletedEvent = Schema.TaggedStruct("Completed", {
   reason: Schema.Literal("ended", "interrupted", "error"),
 });
@@ -512,6 +558,32 @@ const PermissionModeChangedEvent = Schema.TaggedStruct(
   { mode: PermissionMode },
 );
 
+const GoalStatus = Schema.Literal(
+  "active",
+  "paused",
+  "budgetLimited",
+  "usageLimited",
+  "blocked",
+  "complete",
+);
+
+const GoalPayload = Schema.Struct({
+  threadId: Schema.String,
+  objective: Schema.String,
+  status: GoalStatus,
+  tokenBudget: Schema.NullOr(Schema.Number),
+  tokensUsed: Schema.Number,
+  timeUsedSeconds: Schema.Number,
+  createdAt: Schema.Number,
+  updatedAt: Schema.Number,
+});
+
+const GoalUpdatedEvent = Schema.TaggedStruct("GoalUpdated", {
+  goal: GoalPayload,
+});
+
+const GoalClearedEvent = Schema.TaggedStruct("GoalCleared", {});
+
 export const AgentEvent = Schema.Union(
   StartedEvent,
   StatusEvent,
@@ -525,9 +597,13 @@ export const AgentEvent = Schema.Union(
   PermissionRequestEvent,
   SubagentSummaryEvent,
   UsageDeltaEvent,
+  ContextUsageEvent,
+  UsageLimitEvent,
   SessionCursorEvent,
   UserQuestionEvent,
   PermissionModeChangedEvent,
+  GoalUpdatedEvent,
+  GoalClearedEvent,
   CompletedEvent,
   ErrorEvent,
 );
@@ -639,15 +715,6 @@ export interface ModelOption {
   readonly optionDescriptors?: ReadonlyArray<OptionDescriptor>;
   readonly supportsPlanMode?: boolean;
   readonly supportsWebSearch?: "native" | "queryOnly";
-  /**
-   * When set, the renderer renders a rainbow "Ultracode" chip + info icon on
-   * this model's picker row, and the composer footer surfaces an Ultracode
-   * toggle pill. Server-side, picking this model defaults
-   * `modelOptions.effort = "ultracode"`, which the Claude driver normalizes
-   * to `effort: "xhigh"` + `settings.ultracode: true` on the SDK options.
-   * Today only Opus 4.8 advertises this.
-   */
-  readonly ultracode?: { readonly available: true };
 }
 
 /**
@@ -672,7 +739,7 @@ const reasoningSelectDescriptor = (
 /**
  * Per-model effort descriptor for the Claude provider. Each model declares
  * its own supported tiers (see `MODELS_BY_PROVIDER.claude` below); `ultracode`
- * and `ultrathink` are special — see `ReasoningLevel` docs. The knob id is
+ * is special — see `ReasoningLevel` docs. The knob id is
  * `effort` (matching the Claude SDK + t3code reference) rather than
  * `reasoning` to make driver-side mapping explicit.
  */
@@ -692,11 +759,13 @@ const claudeEffortDescriptor = (args: {
 });
 
 /**
- * Boolean descriptor for Claude's per-model toggles. `fastMode` halves the
- * token cost and roughly doubles throughput at the cost of some quality;
- * `thinking` enables Haiku 4.5's always-on adaptive thinking.
+ * Boolean descriptor for a per-model toggle. Used by Claude (`fastMode` halves
+ * the token cost and roughly doubles throughput at the cost of some quality;
+ * `thinking` enables Haiku 4.5's always-on adaptive thinking) and by Codex
+ * (`fastMode` → `serviceTier: "fast"`, the 1.5× speed tier on the latest
+ * models). The driver keys behavior off the descriptor `id`.
  */
-const claudeBooleanDescriptor = (
+const booleanDescriptor = (
   id: string,
   label: string,
 ): BooleanOptionDescriptor => ({
@@ -722,6 +791,17 @@ const claudeContextWindowDescriptor = (): SelectOptionDescriptor => ({
   defaultId: "1m",
 });
 
+const staticContextWindowDescriptor = (
+  id: string,
+  label: string,
+): SelectOptionDescriptor => ({
+  kind: "select",
+  id: "contextWindow",
+  label: "Context Window",
+  options: [{ id, label }],
+  defaultId: id,
+});
+
 export const MODELS_BY_PROVIDER: Record<
   ProviderId,
   ReadonlyArray<ModelOption>
@@ -744,17 +824,14 @@ export const MODELS_BY_PROVIDER: Record<
             { id: "xhigh", label: "Extra High" },
             { id: "max", label: "Max" },
             { id: "ultracode", label: "Ultracode" },
-            { id: "ultrathink", label: "Ultrathink" },
           ],
           defaultId: "high",
-          promptInjectedValues: ["ultrathink"],
         }),
-        claudeBooleanDescriptor("fastMode", "Fast Mode"),
+        booleanDescriptor("fastMode", "Fast Mode"),
         claudeContextWindowDescriptor(),
       ],
       supportsPlanMode: true,
       supportsWebSearch: "native",
-      ultracode: { available: true },
     },
     {
       id: "claude-opus-4-7",
@@ -767,12 +844,11 @@ export const MODELS_BY_PROVIDER: Record<
             { id: "high", label: "High" },
             { id: "xhigh", label: "Extra High" },
             { id: "max", label: "Max" },
-            { id: "ultrathink", label: "Ultrathink" },
+            { id: "ultracode", label: "Ultracode" },
           ],
           defaultId: "xhigh",
-          promptInjectedValues: ["ultrathink"],
         }),
-        claudeBooleanDescriptor("fastMode", "Fast Mode"),
+        booleanDescriptor("fastMode", "Fast Mode"),
         claudeContextWindowDescriptor(),
       ],
       supportsPlanMode: true,
@@ -788,12 +864,11 @@ export const MODELS_BY_PROVIDER: Record<
             { id: "medium", label: "Medium" },
             { id: "high", label: "High" },
             { id: "max", label: "Max" },
-            { id: "ultrathink", label: "Ultrathink" },
+            { id: "ultracode", label: "Ultracode" },
           ],
           defaultId: "high",
-          promptInjectedValues: ["ultrathink"],
         }),
-        claudeBooleanDescriptor("fastMode", "Fast Mode"),
+        booleanDescriptor("fastMode", "Fast Mode"),
         claudeContextWindowDescriptor(),
       ],
       supportsPlanMode: true,
@@ -809,10 +884,9 @@ export const MODELS_BY_PROVIDER: Record<
             { id: "medium", label: "Medium" },
             { id: "high", label: "High" },
             { id: "max", label: "Max" },
-            { id: "ultrathink", label: "Ultrathink" },
+            { id: "ultracode", label: "Ultracode" },
           ],
           defaultId: "high",
-          promptInjectedValues: ["ultrathink"],
         }),
         claudeContextWindowDescriptor(),
       ],
@@ -822,7 +896,7 @@ export const MODELS_BY_PROVIDER: Record<
     {
       id: "claude-haiku-4-5",
       label: "Haiku 4.5",
-      optionDescriptors: [claudeBooleanDescriptor("thinking", "Thinking")],
+      optionDescriptors: [booleanDescriptor("thinking", "Thinking")],
       supportsPlanMode: true,
       supportsWebSearch: "native",
     },
@@ -831,7 +905,14 @@ export const MODELS_BY_PROVIDER: Record<
     {
       id: "gpt-5.4",
       label: "GPT-5.4",
-      optionDescriptors: [reasoningSelectDescriptor("medium")],
+      // `fastMode` → `serviceTier: "fast"`. OpenAI only offers the fast tier on
+      // the latest models (GPT-5.4 / GPT-5.5); older Codex CLIs don't accept
+      // the field, so the toggle is additionally gated on the `fastMode`
+      // capability (CLI version) + the live model's `serviceTiers`.
+      optionDescriptors: [
+        reasoningSelectDescriptor("medium"),
+        booleanDescriptor("fastMode", "Fast"),
+      ],
       supportsPlanMode: true,
       supportsWebSearch: "native",
     },
@@ -839,6 +920,17 @@ export const MODELS_BY_PROVIDER: Record<
       id: "gpt-5.4-mini",
       label: "GPT-5.4 mini",
       optionDescriptors: [reasoningSelectDescriptor("medium")],
+      supportsPlanMode: true,
+      supportsWebSearch: "native",
+    },
+    {
+      id: "gpt-5.5",
+      label: "GPT-5.5",
+      // Fast tier supported — see gpt-5.4 note above.
+      optionDescriptors: [
+        reasoningSelectDescriptor("medium"),
+        booleanDescriptor("fastMode", "Fast"),
+      ],
       supportsPlanMode: true,
       supportsWebSearch: "native",
     },
@@ -944,8 +1036,18 @@ export const MODELS_BY_PROVIDER: Record<
     { id: "composer-2.5", label: "Composer 2.5", supportsPlanMode: true },
     { id: "gpt-5.5", label: "GPT-5.5", supportsPlanMode: true },
     { id: "gpt-5.3-codex", label: "Codex 5.3", supportsPlanMode: true },
-    { id: "claude-sonnet-4-6", label: "Sonnet 4.6", supportsPlanMode: true },
-    { id: "claude-opus-4-7", label: "Opus 4.7", supportsPlanMode: true },
+    {
+      id: "claude-sonnet-4-6",
+      label: "Sonnet 4.6",
+      optionDescriptors: [staticContextWindowDescriptor("1m", "1M")],
+      supportsPlanMode: true,
+    },
+    {
+      id: "claude-opus-4-7",
+      label: "Opus 4.7",
+      optionDescriptors: [staticContextWindowDescriptor("1m", "1M")],
+      supportsPlanMode: true,
+    },
     { id: "gemini-3.1-pro", label: "Gemini 3.1 Pro", supportsPlanMode: true },
   ],
   // OpenCode is a meta-provider: it spawns a local `opencode serve` and

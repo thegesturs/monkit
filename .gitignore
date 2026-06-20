@@ -50,6 +50,9 @@ yarn-error.log*
 .context
 .notes
 
-# Local app runtime data (SQLite DB, devnet artifacts, etc.)
-.memoize/
+.gstack/
 
+# Hugeicons migrate CLI artifacts (backups + HTML reports)
+apps/renderer/hugeicons-migrate-backup-*/
+apps/renderer/hugeicons-migration-report-*.html
+.gstack/

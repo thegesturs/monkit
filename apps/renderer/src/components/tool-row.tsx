@@ -1,4 +1,6 @@
 import {
+  ArrowDown01Icon,
+  ArrowRight01Icon,
   Brain01Icon,
   BrowserIcon,
   BubbleChatIcon,
@@ -14,9 +16,8 @@ import {
   TerminalIcon,
   Tick02Icon,
   Wrench01Icon,
-} from "@hugeicons/core-free-icons";
+} from "@hugeicons-pro/core-bulk-rounded";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { ChevronDown, ChevronRight } from "lucide-react";
 import { useState } from "react";
 
 import type {
@@ -35,7 +36,10 @@ import {
   diffStats,
   EditDiff,
   extractEdits,
+  extractPatchEntries,
   type FileEdit,
+  patchStats,
+  UnifiedPatchDiff,
 } from "./inline-diff.tsx";
 
 type IconHandle = Parameters<typeof HugeiconsIcon>[0]["icon"];
@@ -426,7 +430,7 @@ function ExpandableIconRow({
   hasContent: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const Chevron = expanded ? ChevronDown : ChevronRight;
+  const chevron = expanded ? ArrowDown01Icon : ArrowRight01Icon;
   return (
     <div className="px-4">
       <button
@@ -449,7 +453,8 @@ function ExpandableIconRow({
             )}
           />
           {hasContent ? (
-            <Chevron
+            <HugeiconsIcon
+              icon={chevron}
               aria-hidden="true"
               className={cn(
                 "col-start-1 row-start-1 size-3.5 text-muted-foreground opacity-0 transition-opacity duration-150 ease-out",
@@ -581,31 +586,51 @@ const buildToolView = (
     case "Write":
     case "MultiEdit": {
       const path = asString(obj.file_path);
-      const edits = extractEdits(tool, input);
+      const patches = extractPatchEntries(input);
+      const edits = patches.length > 0 ? [] : extractEdits(tool, input);
       const label =
         tool === "Write"
           ? "Write"
           : tool === "MultiEdit"
-            ? `MultiEdit (${edits.length})`
+            ? `MultiEdit (${edits.length || patches.length})`
             : "Edit";
-      const stats = edits.length > 0 ? diffStats(edits) : null;
+      const stats =
+        patches.length > 0
+          ? patchStats(patches)
+          : edits.length > 0
+            ? diffStats(edits)
+            : null;
       return {
         icon: PencilEdit01Icon,
         label,
         trailing:
           path !== null ? (
             <span className="flex items-center gap-2 tabular-nums">
-              <FileBadge path={path} view="diff" />
-              {stats !== null && stats.added > 0 ? (
-                <span className="text-emerald-400">+{stats.added}</span>
-              ) : null}
-              {stats !== null && stats.removed > 0 ? (
-                <span className="text-red-400">-{stats.removed}</span>
-              ) : null}
+              <FileBadge
+                path={path}
+                view="diff"
+                diffStats={
+                  stats !== null
+                    ? { added: stats.added, removed: stats.removed }
+                    : undefined
+                }
+              />
             </span>
           ) : undefined,
         fallbackBody:
-          edits.length > 0 ? (
+          patches.length > 0 ? (
+            <div className="space-y-2">
+              {patches.map((patch, i) => (
+                <UnifiedPatchDiff
+                  key={i}
+                  path={patch.file_path}
+                  patch={patch.patch}
+                  kind={patch.kind}
+                  showHeader={patches.length > 1}
+                />
+              ))}
+            </div>
+          ) : edits.length > 0 ? (
             <div className="space-y-px">
               {edits.map((edit, i) => (
                 <EditDiff
@@ -889,7 +914,7 @@ const buildToolView = (
               </div>
             )}
             {promptText && (
-              <div className="rounded border bg-muted/30 p-1.5 font-mono text-[11px] leading-snug">
+              <div className="rounded border bg-muted p-1.5 font-mono text-[11px] leading-snug">
                 {promptText.length > 280
                   ? promptText.slice(0, 277) + "…"
                   : promptText}

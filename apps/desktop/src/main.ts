@@ -2,6 +2,7 @@ import { RpcSerialization } from "@effect/rpc";
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   nativeTheme,
@@ -11,9 +12,13 @@ import {
 } from "electron";
 import { Effect, Fiber, Layer } from "effect";
 import fixPath from "fix-path";
+import { execFile, spawn } from "node:child_process";
+import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
+import { homedir } from "node:os";
 import * as Path from "node:path";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 
 import { makeMainLayer } from "@memoize/server";
 
@@ -82,6 +87,12 @@ const APP_NAME = isDevelopment ? "monkit Beta (Dev)" : "monkit Beta";
 
 app.setName(APP_NAME);
 
+const MEMOIZE_USER_DATA_DIR = process.env.MEMOIZE_USER_DATA_DIR?.trim();
+if (MEMOIZE_USER_DATA_DIR) {
+  fsSync.mkdirSync(MEMOIZE_USER_DATA_DIR, { recursive: true });
+  app.setPath("userData", MEMOIZE_USER_DATA_DIR);
+}
+
 // Lock the app to macOS's dark appearance so the sidebar vibrancy material
 // always renders in its dark variant. Without this, vibrancy follows the
 // user's system theme — on a light-mode Mac the bright material lets the
@@ -91,6 +102,273 @@ nativeTheme.themeSource = "dark";
 
 let mainWindow: BrowserWindow | null = null;
 let runtimeFiber: Fiber.RuntimeFiber<void, never> | null = null;
+const USER_APPLICATIONS_DIR = Path.join(homedir(), "Applications");
+const execFileAsync = promisify(execFile);
+
+const appendAppLog = (fileName: string, line: string): void => {
+  try {
+    const filePath = Path.join(app.getPath("userData"), "logs", fileName);
+    fsSync.mkdirSync(Path.dirname(filePath), { recursive: true });
+    fsSync.appendFileSync(filePath, `${line}\n`, "utf8");
+  } catch {
+    // Logging must never affect app behavior.
+  }
+};
+
+type OpenTargetDefinition = {
+  readonly id: string;
+  readonly label: string;
+  readonly appName: string | null;
+  readonly appPaths: ReadonlyArray<string>;
+  readonly iconNames?: ReadonlyArray<string>;
+  readonly iconPaths?: ReadonlyArray<string>;
+};
+
+const OPEN_TARGETS: ReadonlyArray<OpenTargetDefinition> = [
+  {
+    id: "finder",
+    label: "Finder",
+    appName: null,
+    appPaths: ["/System/Library/CoreServices/Finder.app"],
+    iconNames: ["Finder"],
+    iconPaths: [
+      "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/FinderIcon.icns",
+    ],
+  },
+  {
+    id: "cursor",
+    label: "Cursor",
+    appName: "Cursor",
+    appPaths: [
+      "/Applications/Cursor.app",
+      Path.join(USER_APPLICATIONS_DIR, "Cursor.app"),
+    ],
+    iconNames: ["Cursor"],
+  },
+  {
+    id: "vscode",
+    label: "VS Code",
+    appName: "Visual Studio Code",
+    appPaths: [
+      "/Applications/Visual Studio Code.app",
+      Path.join(USER_APPLICATIONS_DIR, "Visual Studio Code.app"),
+      "/Applications/Visual Studio Code - Insiders.app",
+      Path.join(USER_APPLICATIONS_DIR, "Visual Studio Code - Insiders.app"),
+    ],
+    iconNames: ["Code", "Visual Studio Code", "VSCode"],
+  },
+  {
+    id: "windsurf",
+    label: "Windsurf",
+    appName: "Windsurf",
+    appPaths: [
+      "/Applications/Windsurf.app",
+      Path.join(USER_APPLICATIONS_DIR, "Windsurf.app"),
+    ],
+    iconNames: ["Windsurf"],
+  },
+  {
+    id: "zed",
+    label: "Zed",
+    appName: "Zed",
+    appPaths: [
+      "/Applications/Zed.app",
+      Path.join(USER_APPLICATIONS_DIR, "Zed.app"),
+    ],
+    iconNames: ["Zed"],
+  },
+  {
+    id: "xcode",
+    label: "Xcode",
+    appName: "Xcode",
+    appPaths: [
+      "/Applications/Xcode.app",
+      Path.join(USER_APPLICATIONS_DIR, "Xcode.app"),
+    ],
+    iconNames: ["Xcode"],
+  },
+  {
+    id: "ghostty",
+    label: "Ghostty",
+    appName: "Ghostty",
+    appPaths: [
+      "/Applications/Ghostty.app",
+      Path.join(USER_APPLICATIONS_DIR, "Ghostty.app"),
+    ],
+    iconNames: ["Ghostty"],
+  },
+  {
+    id: "terminal",
+    label: "Terminal",
+    appName: "Terminal",
+    appPaths: ["/System/Applications/Utilities/Terminal.app"],
+    iconNames: ["Terminal"],
+  },
+  {
+    id: "antigravity",
+    label: "Antigravity",
+    appName: "Antigravity",
+    appPaths: [
+      "/Applications/Antigravity.app",
+      Path.join(USER_APPLICATIONS_DIR, "Antigravity.app"),
+    ],
+    iconNames: ["Antigravity"],
+  },
+];
+
+const openTargetById = new Map(
+  OPEN_TARGETS.map((target) => [target.id, target]),
+);
+
+const pathExists = async (path: string): Promise<boolean> => {
+  try {
+    await fs.access(path);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const firstExistingPath = async (
+  paths: ReadonlyArray<string>,
+): Promise<string | null> => {
+  for (const candidate of paths) {
+    if (await pathExists(candidate)) return candidate;
+  }
+  return null;
+};
+
+const normalizeIconHint = (value: string): string =>
+  value.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+const plistRawValue = async (
+  plistPath: string,
+  key: string,
+): Promise<string | null> => {
+  try {
+    const { stdout } = await execFileAsync(
+      "/usr/bin/plutil",
+      ["-extract", key, "raw", "-o", "-", plistPath],
+      { encoding: "utf8" },
+    );
+    const value = stdout.trim();
+    return value.length === 0 ? null : value;
+  } catch {
+    return null;
+  }
+};
+
+const iconFileNames = (iconName: string): ReadonlyArray<string> => {
+  const trimmed = iconName.trim();
+  if (trimmed.length === 0) return [];
+  return trimmed.toLowerCase().endsWith(".icns")
+    ? [trimmed]
+    : [trimmed, `${trimmed}.icns`];
+};
+
+const bundleDeclaredIconNames = async (
+  appPath: string,
+): Promise<ReadonlyArray<string>> => {
+  const plistPath = Path.join(appPath, "Contents", "Info.plist");
+  const names = await Promise.all([
+    plistRawValue(plistPath, "CFBundleIconFile"),
+    plistRawValue(plistPath, "CFBundleIconName"),
+  ]);
+  return names.flatMap((name) => (name === null ? [] : iconFileNames(name)));
+};
+
+const bundleIconPath = async (
+  target: OpenTargetDefinition,
+  appPath: string | null,
+): Promise<string | null> => {
+  const explicitIconPath = await firstExistingPath(target.iconPaths ?? []);
+  if (explicitIconPath !== null) return explicitIconPath;
+  if (appPath === null) return null;
+
+  const resourcesPath = Path.join(appPath, "Contents", "Resources");
+  const declaredIconNames = await bundleDeclaredIconNames(appPath);
+  const candidateIconNames = [
+    ...declaredIconNames,
+    ...(target.iconNames ?? []).flatMap(iconFileNames),
+  ];
+
+  for (const fileName of candidateIconNames) {
+    const candidate = Path.join(resourcesPath, fileName);
+    if (await pathExists(candidate)) return candidate;
+  }
+
+  let entries: ReadonlyArray<string>;
+  try {
+    entries = await fs.readdir(resourcesPath);
+  } catch {
+    return null;
+  }
+
+  const hints = [target.label, target.appName ?? "", target.id]
+    .filter((value) => value.length > 0)
+    .map(normalizeIconHint);
+  const genericIconNames = new Set(["document", "default", "file", "text"]);
+  const scored = entries
+    .filter((entry) => entry.toLowerCase().endsWith(".icns"))
+    .map((entry) => {
+      const baseName = normalizeIconHint(Path.basename(entry, ".icns"));
+      let score = 0;
+      if (hints.includes(baseName)) score += 100;
+      else if (
+        hints.some(
+          (hint) =>
+            hint.length > 0 &&
+            (baseName.includes(hint) || hint.includes(baseName)),
+        )
+      ) {
+        score += 80;
+      }
+      if (genericIconNames.has(baseName)) score -= 50;
+      return { entry, score };
+    })
+    .sort((left, right) => right.score - left.score);
+
+  const best = scored.find((item) => item.score > 0) ?? scored[0];
+  return best === undefined ? null : Path.join(resourcesPath, best.entry);
+};
+
+const appIconDataUrl = async (
+  target: OpenTargetDefinition,
+  appPath: string | null,
+): Promise<string | null> => {
+  const iconPath = await bundleIconPath(target, appPath);
+  if (iconPath === null) return null;
+  try {
+    const stat = await fs.stat(iconPath);
+    const cacheDir = Path.join(app.getPath("userData"), "open-target-icons");
+    await fs.mkdir(cacheDir, { recursive: true });
+    const cacheName = `${target.id}-${stat.size}-${Math.floor(stat.mtimeMs)}.png`;
+    const pngPath = Path.join(cacheDir, cacheName);
+    if (!(await pathExists(pngPath))) {
+      await execFileAsync(
+        "/usr/bin/sips",
+        ["-s", "format", "png", iconPath, "--out", pngPath],
+        { encoding: "utf8" },
+      );
+    }
+    const data = await fs.readFile(pngPath);
+    return `data:image/png;base64,${data.toString("base64")}`;
+  } catch {
+    return null;
+  }
+};
+
+const openWithApp = (appSpecifier: string, targetPath: string): Promise<void> =>
+  new Promise((resolve, reject) => {
+    const child = spawn("open", ["-a", appSpecifier, targetPath], {
+      stdio: "ignore",
+    });
+    child.once("error", reject);
+    child.once("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`open exited with code ${code ?? "null"}`));
+    });
+  });
 
 // Electron's dialog is the only host-shell API the server reaches for. Wrap
 // it here so apps/server stays free of any UI-toolkit imports — see ADR 0007.
@@ -106,11 +384,7 @@ const folderPicker = {
     Effect.promise(() =>
       dialog.showOpenDialog({
         defaultPath: app.getPath("home"),
-        properties: [
-          "openDirectory",
-          "createDirectory",
-          "showHiddenFiles",
-        ],
+        properties: ["openDirectory", "createDirectory", "showHiddenFiles"],
       }),
     ).pipe(
       Effect.map((result) =>
@@ -164,10 +438,7 @@ function createMainWindow() {
   // toggle — a fresh boot in fullscreen still gets the initial value.
   const sendFullScreenState = () => {
     if (mainWindow === null) return;
-    mainWindow.webContents.send(
-      "window:fullscreen",
-      mainWindow.isFullScreen(),
-    );
+    mainWindow.webContents.send("window:fullscreen", mainWindow.isFullScreen());
   };
   mainWindow.on("enter-full-screen", sendFullScreenState);
   mainWindow.on("leave-full-screen", sendFullScreenState);
@@ -194,6 +465,58 @@ function createMainWindow() {
 
   ipcMain.on("app:openExternal", (_event, rawUrl: unknown) => {
     openHttpExternal(rawUrl);
+  });
+
+  ipcMain.handle("app:listOpenTargets", async (_event, rawPath: unknown) => {
+    if (typeof rawPath !== "string" || rawPath.length === 0) return [];
+    const existingPath = await pathExists(rawPath);
+    if (!existingPath) return [];
+
+    return Promise.all(
+      OPEN_TARGETS.map(async (target) => {
+        const appPath = await firstExistingPath(target.appPaths);
+        const alwaysAvailable =
+          target.id === "finder" || target.id === "terminal";
+        const iconDataUrl = await appIconDataUrl(target, appPath);
+        const available = alwaysAvailable || appPath !== null;
+        return {
+          id: target.id,
+          label: target.label,
+          available,
+          iconDataUrl,
+        };
+      }),
+    );
+  });
+
+  ipcMain.handle(
+    "app:openPathInApp",
+    async (_event, rawPath: unknown, rawAppId: unknown) => {
+      if (typeof rawPath !== "string" || typeof rawAppId !== "string") return;
+      if (!(await pathExists(rawPath))) return;
+      const target = openTargetById.get(rawAppId);
+      if (target === undefined) return;
+      if (target.id === "finder") {
+        shell.showItemInFolder(rawPath);
+        return;
+      }
+      const appPath = await firstExistingPath(target.appPaths);
+      const appSpecifier = appPath ?? target.appName;
+      if (appSpecifier === null) return;
+      await openWithApp(appSpecifier, rawPath);
+    },
+  );
+
+  ipcMain.handle("app:revealPath", async (_event, rawPath: unknown) => {
+    if (typeof rawPath !== "string") return;
+    if (!(await pathExists(rawPath))) return;
+    shell.showItemInFolder(rawPath);
+  });
+
+  ipcMain.handle("app:copyPath", async (_event, rawPath: unknown) => {
+    if (typeof rawPath !== "string") return;
+    if (!(await pathExists(rawPath))) return;
+    clipboard.writeText(rawPath);
   });
 
   // Markdown links rendered by react-markdown have no `target="_blank"`, so a
@@ -289,9 +612,9 @@ function createMainWindow() {
   // Boot the Effect runtime once the window's webContents exists. The RPC
   // server protocol is bound to this webContents, so a window restart means
   // a fresh runtime — the only Effect.runFork in the main process.
-  const serverProtocol = electronServerProtocolLayer(mainWindow.webContents).pipe(
-    Layer.provide(RpcSerialization.layerJson),
-  );
+  const serverProtocol = electronServerProtocolLayer(
+    mainWindow.webContents,
+  ).pipe(Layer.provide(RpcSerialization.layerJson));
 
   runtimeFiber = Effect.runFork(
     Layer.launch(
@@ -313,15 +636,24 @@ function createMainWindow() {
     ),
   );
 
+  // Persist renderer console output so UI-side races can be diagnosed from
+  // disk after the fact. In dev we also mirror it into the terminal.
+  mainWindow.webContents.on(
+    "console-message",
+    (_event, level, message, line, source) => {
+      const payload = JSON.stringify({
+        ts: new Date().toISOString(),
+        level,
+        message,
+        source,
+        line,
+      });
+      appendAppLog("renderer.log", payload);
+      if (isDevelopment) console.log(`[renderer] ${message}`);
+    },
+  );
+
   if (isDevelopment) {
-    // Mirror renderer console output into the dev terminal so we can see
-    // RPC smoke-test logs without having to open DevTools.
-    mainWindow.webContents.on(
-      "console-message",
-      (_event, _level, message, _line, _source) => {
-        console.log(`[renderer] ${message}`);
-      },
-    );
     void mainWindow.loadURL(DEV_SERVER_URL);
     mainWindow.webContents.openDevTools({ mode: "detach" });
   } else {
@@ -331,7 +663,13 @@ function createMainWindow() {
     // <app>/Contents/Resources/app/renderer/dist (see
     // apps/desktop/electron-builder.yml).
     const rendererIndex = app.isPackaged
-      ? Path.join(process.resourcesPath, "app", "renderer", "dist", "index.html")
+      ? Path.join(
+          process.resourcesPath,
+          "app",
+          "renderer",
+          "dist",
+          "index.html",
+        )
       : Path.resolve(__dirname, "..", "..", "renderer", "dist", "index.html");
     void mainWindow.loadFile(rendererIndex);
   }
@@ -346,12 +684,14 @@ function createMainWindow() {
 }
 
 /**
- * Resolve `memoize://attachments/<id>` to a file under
- * `<userDataDir>/attachments/`. The id has no extension on the wire so we
- * scan the directory for a file with the matching stem. Anything outside
- * the host `attachments` is rejected — no path traversal, no other hosts.
+ * Resolve internal asset URLs to files under userData:
+ *   - `memoize://attachments/<id>`
+ *   - `memoize://pokemon/<dex-number>` or `memoize://pokemon/<dex-number>-<variant>`
+ * The id has no extension on the wire so we scan the directory for a file
+ * with the matching stem. Anything outside known hosts is rejected.
  */
 const ATTACHMENTS_HOST = "attachments";
+const POKEMON_HOST = "pokemon";
 
 const MIME_BY_EXT: Record<string, string> = {
   png: "image/png",
@@ -364,10 +704,17 @@ const MIME_BY_EXT: Record<string, string> = {
 
 const registerMemoizeProtocol = (): void => {
   const attachmentsDir = Path.join(app.getPath("userData"), "attachments");
+  const pokemonDir = Path.join(app.getPath("userData"), "pokemon-sprites");
 
   protocol.handle("memoize", async (request) => {
     const url = new URL(request.url);
-    if (url.host !== ATTACHMENTS_HOST) {
+    const assetDir =
+      url.host === ATTACHMENTS_HOST
+        ? attachmentsDir
+        : url.host === POKEMON_HOST
+          ? pokemonDir
+          : null;
+    if (assetDir === null) {
       return new Response(null, { status: 404 });
     }
 
@@ -380,7 +727,7 @@ const registerMemoizeProtocol = (): void => {
 
     let entries: string[];
     try {
-      entries = await fs.readdir(attachmentsDir);
+      entries = await fs.readdir(assetDir);
     } catch {
       return new Response(null, { status: 404 });
     }
@@ -390,7 +737,7 @@ const registerMemoizeProtocol = (): void => {
     });
     if (!filename) return new Response(null, { status: 404 });
 
-    const absPath = Path.join(attachmentsDir, filename);
+    const absPath = Path.join(assetDir, filename);
     const ext = filename.slice(filename.lastIndexOf(".") + 1).toLowerCase();
     const mime = MIME_BY_EXT[ext] ?? "application/octet-stream";
 
