@@ -1,14 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, RotateCw, Star } from "lucide-react";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { StarIcon } from "@hugeicons-pro/core-bulk-rounded";
+import { useEffect, useRef, useState } from "react";
 import { Effect, Fiber, Stream } from "effect";
+import { ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
 
-import { BrowserCommandResult, type BrowserCommandRequest } from "@memoize/wire";
+import {
+  BrowserCommandResult,
+  type BrowserCommandRequest,
+} from "@memoize/wire";
 
 import { getRpcClient } from "../lib/rpc-client.ts";
 import { useUiStore } from "../store/ui.ts";
 import { BrowserShutter } from "./browser-shutter.tsx";
-
-import { useUiStore } from "../store/ui.ts";
 
 /**
  * In-app Browser tab — toolbar (back/forward/refresh/URL bar) + Electron
@@ -132,10 +135,10 @@ export function BrowserPane() {
     const executeBrowserCommand = async (
       req: BrowserCommandRequest,
     ): Promise<void> => {
-      // Always surface the action: force the Browser tab visible. This also
-      // un-hides the webview so `capturePage` works (it returns an empty
-      // image for a `display:none` element).
-      useUiStore.getState().setActiveRightTab("browser");
+      // Always surface the action: open the sidebar and force the Browser
+      // panel visible+active. This also un-hides the webview so `capturePage`
+      // works (it returns an empty image for a `display:none` element).
+      useUiStore.getState().revealPanel("browser");
       const wv = webviewRef.current as WebviewElement | null;
       const result = await runBrowserCommand(req, wv, {
         setUrl,
@@ -158,7 +161,7 @@ export function BrowserPane() {
     };
   }, []);
 
-  const navigate = useCallback((next: string) => {
+  const navigate = (next: string) => {
     const resolved = resolveUrl(next);
     if (resolved === null) return;
     setUrl(resolved);
@@ -173,17 +176,19 @@ export function BrowserPane() {
         wv.src = resolved;
       }
     }
-  }, []);
+  };
 
   // Consume a URL queued by "Open in app browser" affordances (e.g. the Monad
-  // frontend runner), then clear it so re-opening the same URL re-triggers.
+  // frontend runner via `openInBrowser`), then clear it so re-opening the same
+  // URL re-triggers. `openInBrowser` already revealed the Browser panel.
   const pendingBrowserUrl = useUiStore((s) => s.pendingBrowserUrl);
-  const clearPendingBrowserUrl = useUiStore((s) => s.clearPendingBrowserUrl);
   useEffect(() => {
     if (pendingBrowserUrl === null) return;
     navigate(pendingBrowserUrl);
-    clearPendingBrowserUrl();
-  }, [pendingBrowserUrl, clearPendingBrowserUrl, navigate]);
+    useUiStore.getState().clearPendingBrowserUrl();
+    // navigate is stable for our purposes; only re-run when the queued URL changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingBrowserUrl]);
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -224,22 +229,23 @@ export function BrowserPane() {
           disabled={!canGoBack}
           ariaLabel="Back"
         >
-          <ArrowLeft className="size-3.5" />
+          <ChevronLeft className="size-3.5" strokeWidth={1.8} />
         </ToolbarButton>
         <ToolbarButton
           onClick={() => go("forward")}
           disabled={!canGoForward}
           ariaLabel="Forward"
         >
-          <ArrowRight className="size-3.5" />
+          <ChevronRight className="size-3.5" strokeWidth={1.8} />
         </ToolbarButton>
         <ToolbarButton
           onClick={reload}
           disabled={url === ""}
           ariaLabel={isLoading ? "Stop" : "Reload"}
         >
-          <RotateCw
+          <RefreshCw
             className={`size-3.5 ${isLoading ? "animate-spin" : ""}`}
+            strokeWidth={1.8}
           />
         </ToolbarButton>
         <ToolbarButton
@@ -249,7 +255,7 @@ export function BrowserPane() {
           disabled={true}
           ariaLabel="Bookmark"
         >
-          <Star className="size-3.5" />
+          <HugeiconsIcon icon={StarIcon} className="size-3.5" />
         </ToolbarButton>
         <input
           type="text"
@@ -328,9 +334,13 @@ async function runBrowserCommand(
         await delay(180);
         const image = await wv.capturePage();
         if (image.isEmpty()) {
-          return fail("Screenshot came back empty — the page may still be loading.");
+          return fail(
+            "Screenshot came back empty — the page may still be loading.",
+          );
         }
-        const base64 = image.toDataURL().replace(/^data:image\/png;base64,/, "");
+        const base64 = image
+          .toDataURL()
+          .replace(/^data:image\/png;base64,/, "");
         hooks.flashShutter();
         return BrowserCommandResult.make({
           id: req.id,
@@ -368,7 +378,10 @@ async function runBrowserCommand(
         return resultFromJs(req.id, res, `Typed into ${command.ref}.`);
       }
       case "Wait": {
-        if (typeof command.selector === "string" && command.selector.length > 0) {
+        if (
+          typeof command.selector === "string" &&
+          command.selector.length > 0
+        ) {
           const res = await runJsObject(
             wv,
             `(async () => { const sel = ${JSON.stringify(command.selector)}; const deadline = Date.now() + 10000; while (Date.now() < deadline) { if (document.querySelector(sel)) return JSON.stringify({ ok:true, detail:'Element appeared: ' + sel }); await new Promise(r => setTimeout(r, 150)); } return JSON.stringify({ ok:false, error:'Timed out (10s) waiting for ' + sel }); })()`,
@@ -418,9 +431,9 @@ async function runBrowserCommand(
       case "Press": {
         const refClause =
           typeof command.ref === "string" && command.ref.length > 0
-            ? (isValidRef(command.ref)
-                ? `document.querySelector('[data-mz-ref=${JSON.stringify(command.ref)}]')`
-                : null)
+            ? isValidRef(command.ref)
+              ? `document.querySelector('[data-mz-ref=${JSON.stringify(command.ref)}]')`
+              : null
             : `(document.activeElement || document.body)`;
         if (refClause === null) return fail("Invalid element ref.");
         const res = await runJsObject(
@@ -432,9 +445,9 @@ async function runBrowserCommand(
       case "Read": {
         const refExpr =
           typeof command.ref === "string" && command.ref.length > 0
-            ? (isValidRef(command.ref)
-                ? `document.querySelector('[data-mz-ref=${JSON.stringify(command.ref)}]')`
-                : null)
+            ? isValidRef(command.ref)
+              ? `document.querySelector('[data-mz-ref=${JSON.stringify(command.ref)}]')`
+              : null
             : `document.body`;
         if (refExpr === null) return fail("Invalid element ref.");
         const raw = await wv.executeJavaScript(
@@ -655,8 +668,9 @@ function resolveUrl(input: string): string | null {
   const trimmed = input.trim();
   if (trimmed === "") return null;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return trimmed;
-  const isLocal =
-    /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:|\/|$)/i.test(trimmed);
+  const isLocal = /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:|\/|$)/i.test(
+    trimmed,
+  );
   return `${isLocal ? "http" : "https"}://${trimmed}`;
 }
 

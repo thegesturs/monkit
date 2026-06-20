@@ -15,11 +15,13 @@ import { importWorkspacesJson } from "./persistence/import-workspaces.ts";
 import { MigrationsLive } from "./persistence/migrations.ts";
 import { NdjsonLoggerLive } from "./persistence/ndjson-logger.ts";
 import { SqliteLive } from "./persistence/sqlite.ts";
+import { PokemonServiceLive } from "./pokemon/layers/pokemon-service.ts";
 import { BrowserBridgeServiceLive } from "./provider/layers/browser-bridge-service.ts";
 import { CredentialsServiceLive } from "./provider/layers/credentials-service.ts";
 import { MessageStoreLive } from "./provider/layers/message-store.ts";
 import { PermissionServiceLive } from "./provider/layers/permission-service.ts";
 import { ProviderServiceLive } from "./provider/layers/provider-service.ts";
+import { TitleGeneratorLive } from "./provider/title-generator.ts";
 import { PtyServiceLive } from "./pty/layers/pty-service.ts";
 import { SkillBridgeLive } from "./skill/layers/skill-bridge.ts";
 import { SkillDiscoveryServiceLive } from "./skill/layers/skill-discovery.ts";
@@ -98,10 +100,23 @@ export const makeMainLayer = (deps: MainLayerDeps) => {
     Layer.provide(NodeContext.layer),
   );
 
+  // Per-repo settings overrides on top of the global defaults.
+  const RepositorySettingsLayer = RepositorySettingsServiceLive.pipe(
+    Layer.provide(MigratedSqlite),
+  );
+
+  const PokemonLayer = PokemonServiceLive.pipe(
+    Layer.provide(MigratedSqlite),
+    Layer.provide(AppPathsLayer),
+    Layer.provide(NodeContext.layer),
+  );
+
   // WorktreeService manages memoize-owned `git worktree` checkouts. Same
   // shape as GitLayer + the SqlClient for persisting the rows.
   const WorktreeLayer = WorktreeServiceLive.pipe(
     Layer.provide(WorkspaceLayer),
+    Layer.provide(RepositorySettingsLayer),
+    Layer.provide(PokemonLayer),
     Layer.provide(MigratedSqlite),
     Layer.provide(NodeContext.layer),
   );
@@ -113,11 +128,6 @@ export const makeMainLayer = (deps: MainLayerDeps) => {
     Layer.provide(WorkspaceLayer),
     Layer.provide(WorktreeLayer),
     Layer.provide(NodeContext.layer),
-  );
-
-  // Per-repo settings overrides on top of the global defaults.
-  const RepositorySettingsLayer = RepositorySettingsServiceLive.pipe(
-    Layer.provide(MigratedSqlite),
   );
 
   const PtyLayer = PtyServiceLive;
@@ -162,6 +172,7 @@ export const makeMainLayer = (deps: MainLayerDeps) => {
   // user isn't re-prompted on resume.
   const PermissionLayer = PermissionServiceLive.pipe(
     Layer.provide(MigratedSqlite),
+    Layer.provide(AppPathsLayer),
   );
 
   // BrowserBridge brokers between the in-process browser MCP tools (driver
@@ -205,11 +216,24 @@ export const makeMainLayer = (deps: MainLayerDeps) => {
   // messages tables. The chat-MVP RPC surface (session.* / messages.*) talks
   // through this; legacy agent.* handlers stay bound to ProviderService for
   // low-level testing.
+  // TitleGenerator names a chat from its first message by running one
+  // throwaway turn through the chat's OWN provider (via ProviderService), so
+  // it reuses whatever auth that provider has — a Grok-only user is never
+  // forced onto Claude.
+  const TitleGeneratorLayer = TitleGeneratorLive.pipe(
+    Layer.provide(ProviderLayer),
+  );
+
   const MessageStoreLayer = MessageStoreLive.pipe(
     Layer.provide(ProviderLayer),
     Layer.provide(WorktreeLayer),
     Layer.provide(RepositorySettingsLayer),
     Layer.provide(PtyLayer),
+    // GitService + ConfigStore + TitleGenerator back the first-message
+    // auto-namer (rename chat + branch); see message-store `autoNameChat`.
+    Layer.provide(GitLayer),
+    Layer.provide(ConfigStoreLayer),
+    Layer.provide(TitleGeneratorLayer),
     Layer.provide(MigratedSqlite),
     Layer.provide(NdjsonLoggerLayer),
   );
@@ -247,6 +271,7 @@ export const makeMainLayer = (deps: MainLayerDeps) => {
     Layer.provide(GitLayer),
     Layer.provide(WorktreeLayer),
     Layer.provide(RepositorySettingsLayer),
+    Layer.provide(PokemonLayer),
     Layer.provide(ConfigStoreLayer),
     Layer.provide(FsLayer),
     Layer.provide(FileSearchLayer),
@@ -260,6 +285,10 @@ export const makeMainLayer = (deps: MainLayerDeps) => {
     Layer.provide(CredentialsServiceLive),
     Layer.provide(SkillBridgeLayer),
     Layer.provide(IndexLayer),
+    // Split into a second pipe: Effect's `.pipe()` overloads cap at ~20
+    // operations, and the merged handler layer (upstream layers + the fork's
+    // Monad layers) exceeds that. Provide order is irrelevant here.
+  ).pipe(
     Layer.provide(MonadLayer),
     Layer.provide(MonadWalletLayer),
     Layer.provide(MonadDeployLayer),

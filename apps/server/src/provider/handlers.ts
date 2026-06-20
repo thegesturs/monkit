@@ -192,6 +192,18 @@ const ChatRename = MemoizeRpcs.toLayerHandler(
     Effect.flatMap(MessageStore, (svc) => svc.renameChat(chatId, title)),
 );
 
+const ChatMarkRead = MemoizeRpcs.toLayerHandler("chat.markRead", ({ chatId }) =>
+  Effect.flatMap(MessageStore, (svc) => svc.markChatRead(chatId)),
+);
+
+const ChatStreamChanges = MemoizeRpcs.toLayerHandler(
+  "chat.streamChanges",
+  ({ projectId }) =>
+    Stream.unwrap(
+      Effect.map(MessageStore, (svc) => svc.streamChatChanges(projectId)),
+    ),
+);
+
 const ChatSetWorktree = MemoizeRpcs.toLayerHandler(
   "chat.setWorktree",
   ({ chatId, worktreeId }) =>
@@ -324,9 +336,33 @@ const SessionStreamStatus = MemoizeRpcs.toLayerHandler(
     ),
 );
 
+const SessionGoalGet = MemoizeRpcs.toLayerHandler(
+  "session.goal.get",
+  ({ sessionId }) =>
+    Effect.flatMap(MessageStore, (svc) => svc.getGoal(sessionId)),
+);
+
+const SessionGoalSet = MemoizeRpcs.toLayerHandler(
+  "session.goal.set",
+  ({ sessionId, goal }) =>
+    Effect.flatMap(MessageStore, (svc) => svc.setGoal(sessionId, goal)),
+);
+
+const SessionGoalClear = MemoizeRpcs.toLayerHandler(
+  "session.goal.clear",
+  ({ sessionId }) =>
+    Effect.flatMap(MessageStore, (svc) => svc.clearGoal(sessionId)),
+);
+
+const SessionGoalStream = MemoizeRpcs.toLayerHandler(
+  "session.goal.stream",
+  ({ sessionId }) =>
+    Stream.unwrap(Effect.map(MessageStore, (svc) => svc.streamGoal(sessionId))),
+);
+
 const MessagesSend = MemoizeRpcs.toLayerHandler(
   "messages.send",
-  ({ sessionId, text, input }) => {
+  ({ sessionId, text, input, asGoal }) => {
     console.log(
       `[rpc.messages.send] sessionId=${sessionId} hasInput=${input !== undefined} attachments=${
         input?.attachments?.length ?? 0
@@ -346,6 +382,8 @@ const MessagesSend = MemoizeRpcs.toLayerHandler(
         input?.attachments,
         input?.fileRefs,
         input?.skillRefs,
+        input?.annotations,
+        asGoal,
       ),
     );
   },
@@ -355,6 +393,66 @@ const MessagesInterrupt = MemoizeRpcs.toLayerHandler(
   "messages.interrupt",
   ({ sessionId }) =>
     Effect.flatMap(MessageStore, (svc) => svc.interruptSession(sessionId)),
+);
+
+const MessagesQueueList = MemoizeRpcs.toLayerHandler(
+  "messages.queue.list",
+  ({ sessionId }) =>
+    Effect.flatMap(MessageStore, (svc) => svc.listQueuedMessages(sessionId)),
+);
+
+const MessagesQueueStream = MemoizeRpcs.toLayerHandler(
+  "messages.queue.stream",
+  ({ sessionId }) =>
+    Stream.unwrap(
+      Effect.map(MessageStore, (svc) => svc.streamQueuedMessages(sessionId)),
+    ),
+);
+
+const MessagesQueueAdd = MemoizeRpcs.toLayerHandler(
+  "messages.queue.add",
+  ({ sessionId, input }) =>
+    Effect.flatMap(MessageStore, (svc) =>
+      svc.addQueuedMessage(sessionId, input),
+    ),
+);
+
+const MessagesQueueUpdate = MemoizeRpcs.toLayerHandler(
+  "messages.queue.update",
+  ({ sessionId, queueId, input }) =>
+    Effect.flatMap(MessageStore, (svc) =>
+      svc.updateQueuedMessage(sessionId, queueId, input),
+    ),
+);
+
+const MessagesQueueDelete = MemoizeRpcs.toLayerHandler(
+  "messages.queue.delete",
+  ({ sessionId, queueId }) =>
+    Effect.flatMap(MessageStore, (svc) =>
+      svc.deleteQueuedMessage(sessionId, queueId),
+    ),
+);
+
+const MessagesQueueSendNow = MemoizeRpcs.toLayerHandler(
+  "messages.queue.sendNow",
+  ({ sessionId, queueId }) =>
+    Effect.flatMap(MessageStore, (svc) =>
+      svc.sendQueuedMessageNow(sessionId, queueId),
+    ),
+);
+
+const MessagesQueueReorder = MemoizeRpcs.toLayerHandler(
+  "messages.queue.reorder",
+  ({ sessionId, queueIds }) =>
+    Effect.flatMap(MessageStore, (svc) =>
+      svc.reorderQueuedMessages(sessionId, queueIds),
+    ),
+);
+
+const MessagesQueueFlush = MemoizeRpcs.toLayerHandler(
+  "messages.queue.flush",
+  ({ sessionId }) =>
+    Effect.flatMap(MessageStore, (svc) => svc.flushQueuedMessages(sessionId)),
 );
 
 // ---------------------------------------------------------------------------
@@ -402,9 +500,7 @@ const PermissionRevokeDecision = MemoizeRpcs.toLayerHandler(
 // ---------------------------------------------------------------------------
 
 const BrowserCommands = MemoizeRpcs.toLayerHandler("browser.commands", () =>
-  Stream.unwrap(
-    Effect.map(BrowserBridgeService, (svc) => svc.commands()),
-  ),
+  Stream.unwrap(Effect.map(BrowserBridgeService, (svc) => svc.commands())),
 );
 
 const BrowserRespond = MemoizeRpcs.toLayerHandler(
@@ -472,6 +568,8 @@ export const ProviderHandlersLayer = Layer.mergeAll(
   ChatGet,
   ChatCreate,
   ChatRename,
+  ChatMarkRead,
+  ChatStreamChanges,
   ChatSetWorktree,
   ChatSetActiveSession,
   ChatArchive,
@@ -483,10 +581,22 @@ export const ProviderHandlersLayer = Layer.mergeAll(
   SessionAnswerQuestion,
   SessionSetWorktree,
   SessionStreamStatus,
+  SessionGoalGet,
+  SessionGoalSet,
+  SessionGoalClear,
+  SessionGoalStream,
   MessagesList,
   MessagesStream,
   MessagesSend,
   MessagesInterrupt,
+  MessagesQueueList,
+  MessagesQueueStream,
+  MessagesQueueAdd,
+  MessagesQueueUpdate,
+  MessagesQueueDelete,
+  MessagesQueueSendNow,
+  MessagesQueueReorder,
+  MessagesQueueFlush,
   PermissionRequests,
   PermissionDecide,
   PermissionListPending,

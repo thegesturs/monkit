@@ -106,7 +106,7 @@ export function DeployPanel({
   const network = useMonadStore((s) => s.activeNetwork);
   const setActiveNetwork = useMonadStore((s) => s.setActiveNetwork);
   const openInBrowser = useUiStore((s) => s.openInBrowser);
-  const setActiveRightTab = useUiStore((s) => s.setActiveRightTab);
+  const revealPanel = useUiStore((s) => s.revealPanel);
   const ctx = useActiveContext();
   const addCommandTerminal = useTerminalsStore((s) => s.addCommand);
 
@@ -311,7 +311,7 @@ export function DeployPanel({
         "cd frontend && bun install && bunx convex dev --configure --once || (echo; echo '--- setup exited; press enter to close ---'; read _)",
       ],
     });
-    setActiveRightTab("terminal");
+    revealPanel("terminal");
   };
 
   const startFrontend = async () => {

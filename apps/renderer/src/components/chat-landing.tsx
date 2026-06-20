@@ -1,17 +1,18 @@
+import { HugeiconsIcon } from "@hugeicons/react";
 import {
-  Check,
-  ChevronDown,
-  FolderClosed,
-  FolderOpen,
-  FolderPlus,
-  Rocket,
-  Send,
-  X,
-} from "lucide-react";
+  ArrowDown01Icon,
+  DashboardSpeedIcon,
+  Folder01Icon,
+  FolderAddIcon,
+  SentIcon,
+  Tick01Icon,
+} from "@hugeicons-pro/core-bulk-rounded";
+// lucide icons retained for the fork's Monad LaunchScreen.
+import { FolderOpen, Rocket, X } from "lucide-react";
 import { Effect } from "effect";
 import { useMemo, useRef, useState } from "react";
 
-import type { FolderId } from "@memoize/wire";
+import { ComposerInput, type FolderId } from "@memoize/wire";
 
 import { cn } from "~/lib/utils";
 import { getRpcClient } from "~/lib/rpc-client";
@@ -34,21 +35,25 @@ import {
   MenuSeparator,
   MenuTrigger,
 } from "~/components/ui/menu";
-import {
-  Tooltip,
-  TooltipPopup,
-  TooltipTrigger,
-} from "~/components/ui/tooltip";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { resolveAutoWorktreeId } from "~/lib/auto-worktree";
 import { useChatsStore } from "~/store/chats";
+import { useMessagesStore } from "~/store/messages";
+import { useProvidersStore } from "~/store/providers";
+import { useSessionsStore } from "~/store/sessions";
 import { useSettingsStore } from "~/store/settings";
 import { useWorkspaceStore } from "~/store/workspace";
 import { ChatCreatingPanel } from "./chat-creating-panel.tsx";
 import { ModelPicker } from "./model-picker.tsx";
 
 const SUGGESTIONS: ReadonlyArray<{ label: string }> = [
-  { label: "Land targeted provider compatibility rules before the next harness drift" },
-  { label: "Bring background activity policy onto main to cut reconnect churn" },
+  {
+    label:
+      "Land targeted provider compatibility rules before the next harness drift",
+  },
+  {
+    label: "Bring background activity policy onto main to cut reconnect churn",
+  },
   { label: "Use the new resource history to finish the leak investigation" },
   { label: "Plan the next slice — what should we tackle first?" },
 ];
@@ -85,6 +90,14 @@ function ProjectLanding() {
   const addFolder = useWorkspaceStore((s) => s.add);
 
   const defaultProviderId = useSettingsStore((s) => s.defaultProviderId);
+  // Goal mode is only offered when the installed Codex CLI is new enough
+  // (version-gated capability from the availability probe). No live session
+  // exists here, so this is the only gate the landing screen can apply.
+  const codexCapabilities = useProvidersStore((s) =>
+    s.capabilitiesFor("codex"),
+  );
+  const codexGoalSupported =
+    defaultProviderId === "codex" && codexCapabilities.includes("goalMode");
   const defaultModelByProvider = useSettingsStore(
     (s) => s.defaultModelByProvider,
   );
@@ -94,11 +107,15 @@ function ProjectLanding() {
   );
 
   const create = useChatsStore((s) => s.create);
+  const send = useMessagesStore((s) => s.send);
   const creating = useChatsStore((s) =>
-    selectedFolderId !== null ? s.creatingByProject[selectedFolderId] === true : false,
+    selectedFolderId !== null
+      ? s.creatingByProject[selectedFolderId] === true
+      : false,
   );
 
   const [text, setText] = useState("");
+  const [goalSendMode, setGoalSendMode] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   // Snapshot of the prompt the user just submitted. Drives the
   // ChatCreatingPanel preview so the form can be hidden during the RPC
@@ -139,7 +156,6 @@ function ProjectLanding() {
     // ChatCreatingPanel below) but stranded the agent in the main checkout.
     const worktreeId = await resolveAutoWorktreeId(selectedFolderId);
     const result = await create(selectedFolderId, defaultProviderId, model, {
-      initialPrompt: trimmed,
       runtimeMode: defaultRuntimeMode,
       worktreeId,
     });
@@ -151,7 +167,23 @@ function ProjectLanding() {
       setPendingPrompt(null);
       return;
     }
+    const sessionId = useSessionsStore.getState().selectedSessionId;
+    if (sessionId !== null) {
+      const input = new ComposerInput({
+        text: trimmed,
+        attachments: [],
+        fileRefs: [],
+        skillRefs: [],
+      });
+      if (goalSendMode && codexGoalSupported) {
+        void send(sessionId, input, { asGoal: true });
+      } else {
+        useMessagesStore.getState().queue(sessionId, input);
+        useMessagesStore.getState().flushQueue(sessionId);
+      }
+    }
     setText("");
+    setGoalSendMode(false);
     // Don't clear pendingPrompt — the parent will unmount us when the
     // view swaps to ChatView, so the panel keeps animating until then.
   };
@@ -185,7 +217,7 @@ function ProjectLanding() {
               aria-label="Dismiss error"
               className="-mr-1 shrink-0 rounded p-0.5 text-rose-200/80 hover:bg-rose-500/[0.12] hover:text-rose-100"
             >
-              <X className="size-3.5" />
+              <X className="size-3.5" strokeWidth={1.8} />
             </button>
           </div>
         )}
@@ -201,7 +233,14 @@ function ProjectLanding() {
         ) : (
           <>
             <Frame>
-              <Card className="rounded-xl border-border/50">
+              <Card
+                className={cn(
+                  "rounded-xl border-border/50",
+                  goalSendMode && codexGoalSupported
+                    ? "border-amber-400/55 shadow-[0_0_0_1px_rgba(251,191,36,0.22)]"
+                    : undefined,
+                )}
+              >
                 <CardPanel className="relative flex flex-col gap-2 px-3 py-2">
                   <textarea
                     ref={textareaRef}
@@ -224,7 +263,40 @@ function ProjectLanding() {
                     style={{ minHeight: MIN_HEIGHT, maxHeight: MAX_HEIGHT }}
                     className="w-full resize-none bg-transparent text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground"
                   />
-                  <div className="flex items-center justify-end">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      {codexGoalSupported ? (
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <Button
+                                variant={goalSendMode ? "secondary" : "ghost"}
+                                size="icon-sm"
+                                onClick={() => setGoalSendMode((v) => !v)}
+                                aria-label={
+                                  goalSendMode
+                                    ? "Sending first message as goal"
+                                    : "Send first message as goal"
+                                }
+                              >
+                                <HugeiconsIcon
+                                  icon={DashboardSpeedIcon}
+                                  className={cn(
+                                    "size-3.5",
+                                    goalSendMode ? "text-amber-300" : undefined,
+                                  )}
+                                />
+                              </Button>
+                            }
+                          />
+                          <TooltipPopup>
+                            {goalSendMode
+                              ? "First send sets a goal"
+                              : "Send first message as goal"}
+                          </TooltipPopup>
+                        </Tooltip>
+                      ) : null}
+                    </div>
                     <Tooltip>
                       <TooltipTrigger
                         render={
@@ -235,7 +307,10 @@ function ProjectLanding() {
                             disabled={!canSend}
                             aria-label="Send"
                           >
-                            <Send className="size-3.5" />
+                            <HugeiconsIcon
+                              icon={SentIcon}
+                              className="size-3.5"
+                            />
                           </Button>
                         }
                       />
@@ -507,9 +582,9 @@ function ProjectPicker({
         className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-foreground hover:bg-muted/60 data-[popup-open]:bg-muted/60"
         aria-label="Pick a project"
       >
-        <FolderClosed className="size-3.5" />
+        <HugeiconsIcon icon={Folder01Icon} className="size-3.5" />
         <span>{selectedName ?? "Pick a project"}</span>
-        <ChevronDown className="size-3 opacity-60" />
+        <HugeiconsIcon icon={ArrowDown01Icon} className="size-3 opacity-60" />
       </MenuTrigger>
       <MenuPopup side="top" align="start" className="w-64 p-1">
         {folders.length === 0 ? (
@@ -531,9 +606,17 @@ function ProjectPicker({
                 )}
               >
                 <span className="col-start-1 row-start-1 flex items-center justify-center">
-                  {active && <Check className="size-3.5 opacity-90" />}
+                  {active && (
+                    <HugeiconsIcon
+                      icon={Tick01Icon}
+                      className="size-3.5 opacity-90"
+                    />
+                  )}
                 </span>
-                <FolderClosed className="col-start-2 row-start-1 size-3.5 opacity-80" />
+                <HugeiconsIcon
+                  icon={Folder01Icon}
+                  className="col-start-2 row-start-1 size-3.5 opacity-80"
+                />
                 <span className="col-start-3 row-start-1 truncate">
                   {folder.name}
                 </span>
@@ -547,7 +630,10 @@ function ProjectPicker({
           className="grid grid-cols-[1rem_auto_1fr] items-center gap-x-2 rounded-md px-2 py-1.5 text-sm"
         >
           <span className="col-start-1 row-start-1" />
-          <FolderPlus className="col-start-2 row-start-1 size-3.5 opacity-80" />
+          <HugeiconsIcon
+            icon={FolderAddIcon}
+            className="col-start-2 row-start-1 size-3.5 opacity-80"
+          />
           <span className="col-start-3 row-start-1">Add new project</span>
         </MenuItem>
       </MenuPopup>

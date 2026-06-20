@@ -1,4 +1,5 @@
-import { Globe, Lock } from "lucide-react";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { GlobeIcon, LockIcon } from "@hugeicons-pro/core-bulk-rounded";
 import { useEffect, useState } from "react";
 
 import type { GithubRepoSummary } from "@memoize/wire";
@@ -15,7 +16,7 @@ import {
   DialogTitle,
 } from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
-import { Diffusion } from "~/components/ui/loaders";
+import { Spinner } from "~/components/ui/spinner";
 import { useWorkspaceStore } from "../store/workspace.ts";
 
 interface CloneRepoDialogProps {
@@ -144,7 +145,7 @@ export function CloneRepoDialog({ open, onOpenChange }: CloneRepoDialogProps) {
               />
               <Button
                 type="button"
-                variant="outline"
+                variant="secondary"
                 size="sm"
                 onClick={() => void onBrowse()}
               >
@@ -154,14 +155,10 @@ export function CloneRepoDialog({ open, onOpenChange }: CloneRepoDialogProps) {
           </Field>
         </DialogPanel>
 
-        <DialogFooter variant="bare">
+        <DialogFooter>
           <DialogClose
             render={
-              <Button
-                type="button"
-                variant="ghost"
-                disabled={submitting}
-              >
+              <Button type="button" variant="ghost" disabled={submitting}>
                 Cancel
               </Button>
             }
@@ -175,7 +172,7 @@ export function CloneRepoDialog({ open, onOpenChange }: CloneRepoDialogProps) {
             {submitting ? (
               <>
                 <span className="inline-flex size-3.5 items-center justify-center">
-                  <Diffusion dotSize={3} cellPadding={1} />
+                  <Spinner className="size-3.5" />
                 </span>
                 Cloning…
               </>
@@ -243,7 +240,7 @@ function RecentRepos({
   if (authenticated === false || repos.length === 0) {
     return (
       <div className="flex h-32 flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-input bg-background/40 px-4 text-center text-[11px] text-muted-foreground">
-        <Globe className="size-4 opacity-60" />
+        <HugeiconsIcon icon={GlobeIcon} className="size-4 opacity-60" />
         <p>
           {authenticated === false
             ? "Sign in with `gh auth login` to see your repos."
@@ -270,7 +267,10 @@ function RecentRepos({
               <span className="flex items-center gap-1.5 text-[12px] text-foreground">
                 {repo.nameWithOwner}
                 {repo.isPrivate && (
-                  <Lock className="size-2.5 text-muted-foreground" />
+                  <HugeiconsIcon
+                    icon={LockIcon}
+                    className="size-2.5 text-muted-foreground"
+                  />
                 )}
               </span>
               {repo.description !== null && (

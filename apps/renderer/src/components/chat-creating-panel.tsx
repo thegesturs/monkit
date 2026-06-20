@@ -3,7 +3,7 @@ import {
   MessageAdd01Icon,
   Rocket01Icon,
   SparklesIcon,
-} from "@hugeicons/core-free-icons";
+} from "@hugeicons-pro/core-bulk-rounded";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -11,7 +11,7 @@ import type { ProviderId } from "@memoize/wire";
 
 import { cn } from "~/lib/utils";
 import { PROVIDER_LABEL } from "./settings-page";
-import { ThreeDots } from "./ui/loaders";
+import { Spinner } from "./ui/spinner";
 
 /**
  * Step-by-step progress shown while `chat.create` is in flight. The RPC
@@ -62,7 +62,7 @@ export function ChatCreatingPanel({
       {
         id: "chat",
         icon: MessageAdd01Icon,
-        hold: 350,
+        hold: 250,
         render: () => <>Created a new chat</>,
       },
     ];
@@ -70,18 +70,24 @@ export function ChatCreatingPanel({
       out.push({
         id: "worktree",
         icon: GitBranchIcon,
-        hold: 900,
+        hold: 500,
         render: () => (
           <>
             Branching a fresh worktree off <Chip>main</Chip>
           </>
         ),
       });
+      out.push({
+        id: "setup",
+        icon: SparklesIcon,
+        hold: 700,
+        render: () => <>Preparing workspace files</>,
+      });
     }
     out.push({
       id: "provider",
       icon: Rocket01Icon,
-      hold: 1400,
+      hold: 700,
       render: () => (
         <>
           Starting <Chip>{providerLabel}</Chip>
@@ -92,7 +98,7 @@ export function ChatCreatingPanel({
       id: "ready",
       icon: SparklesIcon,
       hold: null,
-      render: () => <>Loading workspace…</>,
+      render: () => <>Setting up workspace…</>,
     });
     return out;
   }, [providerLabel, willCreateWorktree]);
@@ -123,9 +129,14 @@ export function ChatCreatingPanel({
   return (
     <div className="flex flex-col gap-4">
       {prompt.length > 0 && (
-        <p className="line-clamp-3 text-[13px] leading-relaxed text-muted-foreground">
-          {prompt}
-        </p>
+        <div className="rounded-md border border-border/40 bg-muted/25 px-2.5 py-2">
+          <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+            Queued
+          </div>
+          <p className="line-clamp-3 text-[13px] leading-relaxed text-foreground/85">
+            {prompt}
+          </p>
+        </div>
       )}
       <ul className="flex flex-col gap-1">
         {stages.map((stage, i) => {
@@ -153,7 +164,7 @@ export function ChatCreatingPanel({
               <span className="min-w-0 truncate">{stage.render()}</span>
               {state === "active" && (
                 <span className="ml-1 inline-flex items-center text-muted-foreground">
-                  <ThreeDots dotSize={2.5} cellPadding={1} />
+                  <Spinner className="size-4" />
                 </span>
               )}
             </li>

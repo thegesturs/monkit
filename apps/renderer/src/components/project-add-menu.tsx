@@ -1,4 +1,6 @@
-import { FilePlus2, FolderOpen, Globe, Plus } from "lucide-react";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { FileAddIcon, FolderOpenIcon, GlobeIcon } from "@hugeicons-pro/core-bulk-rounded";
+import { Plus } from "lucide-react";
 import { useState } from "react";
 
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "~/components/ui/menu";
@@ -35,7 +37,7 @@ export function ProjectAddMenu() {
                 className="rounded p-1 text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                 aria-label="Add project"
               >
-                <Plus className="size-3.5" />
+                <Plus className="size-3.5" strokeWidth={1.8} />
               </MenuTrigger>
             }
           />
@@ -51,21 +53,21 @@ export function ProjectAddMenu() {
             onClick={() => void add()}
             className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-xs hover:bg-sidebar-accent"
           >
-            <FolderOpen className="size-3.5 text-muted-foreground" />
+            <HugeiconsIcon icon={FolderOpenIcon} className="size-3.5 text-muted-foreground" />
             Open project
           </MenuItem>
           <MenuItem
             onClick={() => setCloneOpen(true)}
             className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-xs hover:bg-sidebar-accent"
           >
-            <Globe className="size-3.5 text-muted-foreground" />
+            <HugeiconsIcon icon={GlobeIcon} className="size-3.5 text-muted-foreground" />
             Open GitHub project
           </MenuItem>
           <MenuItem
             onClick={() => setCreateOpen(true)}
             className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-xs hover:bg-sidebar-accent"
           >
-            <FilePlus2 className="size-3.5 text-muted-foreground" />
+            <HugeiconsIcon icon={FileAddIcon} className="size-3.5 text-muted-foreground" />
             Quick start
           </MenuItem>
         </MenuPopup>

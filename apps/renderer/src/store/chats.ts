@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Fiber, Stream } from "effect";
 import { create } from "zustand";
 
 import type {
@@ -39,7 +39,7 @@ type ChatsState = {
   readonly showArchivedByProject: Record<string, boolean>;
   readonly loadingByProject: Record<string, boolean>;
   /** Per-project in-flight flag for `create()`. Drives the sidebar
-   * "New chat" button's icon swap (SquarePen → Diffusion). */
+   * "New chat" button's icon swap (SquarePen → Spinner). */
   readonly creatingByProject: Record<string, boolean>;
   readonly error: string | null;
   readonly hydrate: (projectId: FolderId) => Promise<void>;
@@ -71,7 +71,33 @@ type ChatsState = {
   readonly unarchive: (chatId: ChatId) => Promise<void>;
   readonly remove: (chatId: ChatId) => Promise<void>;
   readonly select: (chatId: ChatId | null) => void;
+  /**
+   * Stamp the chat read (clears its unread style). Optimistic — patches the
+   * cached `lastReadAt` immediately, then persists via `chat.markRead`.
+   */
+  readonly markRead: (chatId: ChatId) => Promise<void>;
+  /**
+   * Optimistically advance a chat's cached `lastMessageAt` to "now". Driven
+   * by the live per-session status signal so a background chat lights up
+   * unread the instant its agent finishes a turn, without a chat re-hydrate.
+   */
+  readonly noteChatActivity: (chatId: ChatId) => void;
   readonly toggleShowArchived: (projectId: FolderId) => void;
+};
+
+/**
+ * A chat is unread when it has message activity the user hasn't seen since
+ * last viewing it. The currently-selected chat is always treated as read.
+ */
+export const isChatUnread = (
+  chat: Chat,
+  selectedChatId: ChatId | null,
+): boolean => {
+  if (chat.id === selectedChatId) return false;
+  if (chat.archivedAt !== null) return false;
+  if (chat.lastMessageAt === null) return false;
+  if (chat.lastReadAt === null) return true;
+  return chat.lastMessageAt.getTime() > chat.lastReadAt.getTime();
 };
 
 const findChatProject = (
@@ -82,6 +108,48 @@ const findChatProject = (
     if (chats.some((c) => c.id === chatId)) return pid as FolderId;
   }
   return null;
+};
+
+/**
+ * Live `chat.streamChanges` subscription per project — one long-lived fiber
+ * keyed by projectId. Carries server-side chat-row patches (notably the
+ * background auto-namer rewriting a new chat's title after its first
+ * message) so the sidebar updates without a manual refetch.
+ */
+const changeFibers = new Map<string, Fiber.RuntimeFiber<unknown, unknown>>();
+
+const ensureChangeStream = (projectId: FolderId): void => {
+  if (changeFibers.has(projectId)) return;
+  // Reserve the slot synchronously so concurrent hydrate() calls don't race
+  // two subscriptions onto the same project.
+  changeFibers.set(
+    projectId,
+    Effect.runFork(
+      Effect.flatMap(
+        Effect.promise(() => getRpcClient()),
+        (client) =>
+          Stream.runForEach(
+            client.chat.streamChanges({ projectId }),
+            (chat) =>
+              Effect.sync(() => {
+                useChatsStore.setState((s) => {
+                  const chats = s.chatsByProject[projectId];
+                  if (chats === undefined) return s;
+                  if (!chats.some((c) => c.id === chat.id)) return s;
+                  return {
+                    chatsByProject: {
+                      ...s.chatsByProject,
+                      [projectId]: chats.map((c) =>
+                        c.id === chat.id ? chat : c,
+                      ),
+                    },
+                  };
+                });
+              }),
+          ),
+      ),
+    ),
+  );
 };
 
 export const useChatsStore = create<ChatsState>((set, get) => ({
@@ -107,6 +175,9 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
         chatsByProject: { ...s.chatsByProject, [projectId]: chats },
         loadingByProject: { ...s.loadingByProject, [projectId]: false },
       }));
+      // Begin (or keep) the live change subscription now that the list is
+      // seeded — patches only land for chats already in the list.
+      ensureChangeStream(projectId);
     } catch (err) {
       set((s) => ({
         error: formatError(err),
@@ -502,7 +573,68 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
     const fallback = liveTabs[0] ?? null;
     const landingId = memoSession?.id ?? fallback?.id ?? null;
     useSessionsStore.getState().select(landingId);
+    // Viewing a chat marks it read. `markRead` no-ops for archived chats.
+    void get().markRead(chatId);
   },
+  markRead: async (chatId) => {
+    const projectId = findChatProject(get().chatsByProject, chatId);
+    if (projectId === null) return;
+    const chat = (get().chatsByProject[projectId] ?? []).find(
+      (c) => c.id === chatId,
+    );
+    if (chat === undefined || chat.archivedAt !== null) return;
+    // Already read and no fresh activity — skip the round-trip.
+    if (!isChatUnread(chat, null)) return;
+    const now = new Date();
+    const patch = (target: Chat, lastReadAt: Date): Chat =>
+      Object.assign(Object.create(Object.getPrototypeOf(target)), target, {
+        lastReadAt,
+      });
+    set((s) => {
+      const chats = s.chatsByProject[projectId] ?? [];
+      return {
+        chatsByProject: {
+          ...s.chatsByProject,
+          [projectId]: chats.map((c) => (c.id === chatId ? patch(c, now) : c)),
+        },
+      };
+    });
+    try {
+      const client = await getRpcClient();
+      const updated = await Effect.runPromise(client.chat.markRead({ chatId }));
+      set((s) => {
+        const chats = s.chatsByProject[projectId] ?? [];
+        return {
+          chatsByProject: {
+            ...s.chatsByProject,
+            [projectId]: chats.map((c) => (c.id === chatId ? updated : c)),
+          },
+        };
+      });
+    } catch (err) {
+      // Non-fatal — the optimistic stamp already cleared the unread style.
+      set({ error: formatError(err) });
+    }
+  },
+  noteChatActivity: (chatId) =>
+    set((s) => {
+      const projectId = findChatProject(s.chatsByProject, chatId);
+      if (projectId === null) return s;
+      const chats = s.chatsByProject[projectId] ?? [];
+      const now = new Date();
+      return {
+        chatsByProject: {
+          ...s.chatsByProject,
+          [projectId]: chats.map((c) =>
+            c.id === chatId
+              ? Object.assign(Object.create(Object.getPrototypeOf(c)), c, {
+                  lastMessageAt: now,
+                })
+              : c,
+          ),
+        },
+      };
+    }),
   toggleShowArchived: (projectId) => {
     set((s) => ({
       showArchivedByProject: {

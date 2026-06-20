@@ -25,6 +25,56 @@ First public beta under the **monkit** name.
 
 ### Notes
 - Internal identifiers are intentionally unchanged so existing local installs keep their data and auto-update wiring: the bundle id (`app.memoize.desktop`), the `memoize://` URL scheme, the keychain service name, on-disk `~/.memoize/` paths, and the `@memoize/*` workspace package names all stay as-is. Only the display brand changed.
+
+## [0.4.0]
+
+### Added
+- Worktree setup scripts can now run per project/worktree, giving agents a first-class way to prepare dependencies and local environment before starting work. (#126)
+- Mermaid diagrams render directly in markdown responses. (#128)
+- Chat titles and worktree branches can be generated from the first user message, making new agent runs easier to scan and easier to identify in git. (#129)
+- GPT-5.5 Codex is available in the Codex model picker. (#130)
+- Chat rows now include state icons for faster scanning across idle, running, and attention-needed sessions. (#132)
+- Agent completion sounds and deeper permission diagnostics make long-running work and blocked permission flows easier to notice and debug. (#133)
+- Agent message queue persistence keeps queued follow-up messages across renderer/server restarts and improves queue handling for multi-message agent workflows. (#136)
+- Chats now track read/unread state, with Next unread navigation for moving through updated sessions quickly. (#137)
+- Pokémon worktree Pokédex gives the new Pokémon-named worktree system a dedicated browsing surface. (#140)
+- Code annotations composer adds a richer composer path for referencing and annotating source code while prompting agents. (#141)
+- Public Memoize landing site. (#142)
+
+### Changed
+- Grok auth noise is hidden more aggressively and agent activity is grouped for a cleaner timeline. (#127)
+- Claude Ultracode UI is refined so the new model/provider controls fit the rest of the provider experience. (#131)
+- Loaders were standardized around a smoother circle/comet treatment. (#135)
+- Renderer iconography moved from Lucide to Hugeicons Pro, with real provider logos replacing generic marks. (#138)
+- Changes tab cleanup improves file selection, revert flows, conflict handling, and sidebar diff stats. (#139)
+- Renderer surfaces were cleaned up across the app for a tighter, more consistent desktop UI. (#143)
+- Renderer icons were polished after the Hugeicons migration. (#144)
+- Settings UI was cleaned up for a clearer, denser configuration experience. (#145)
+
+### Fixed
+- Permission prompts are now delivered reliably mid-turn, preventing stuck or missed approval flows while an agent is running. (#134)
+
+## [0.3.3]
+
+### Added
+- Claude provider updates: Opus 4.8 and Ultracode model options, plus plan mode now always routes edits through prompts. (#111)
+- ACP agents (Grok, Gemini, Cursor) can execute real terminal/output commands instead of rendering terminal requests as inert tool calls. (#112)
+- In-app agent browser control drives the existing Electron webview, so agents can navigate and inspect pages without opening a separate browser surface. (#117)
+- Top bar can now show live CI state and offers direct merge / auto-merge actions. (#113)
+- Provider cards surface available CLI updates for supported providers. (#114)
+- Claude fast mode toggle for faster lower-latency Claude sessions. (#119)
+- Archive cleanup scripts and related repository cleanup controls. (#120)
+- Repository branch toolbar for faster branch/context switching. (#124)
+
+### Changed
+- Markdown rendering is more polished and consistent in chat output. (#121)
+- Grok access detection now accepts X Premium+ / SuperGrok entitlements. (#122)
+
+### Fixed
+- Grok sessions no longer abort mid-turn when the ACP child surfaces transient `AuthorizationRequired` noise inside `session/update` error frames while the turn is still completing normally. The shared ACP translator now filters that frame on the grok channel so in-flight prompts aren't rejected and the session doesn't flip to idle prematurely.
+- New chats run inside their selected worktree and create branches from a fresh `origin` base. (#115)
+- Codex tool translation handles the current tool event shape correctly. (#123)
+
 ## [0.3.2]
 
 ### Added
